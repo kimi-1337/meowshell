@@ -6,7 +6,6 @@ const path = require('path')
 const { spawnSync } = require('child_process')
 
 const root = path.resolve(__dirname, '..')
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const optionalDependencies = require(path.join(root, 'node_modules', '@lydell', 'node-pty', 'package.json'))
   .optionalDependencies
 const packageNames = ['@lydell/node-pty-win32-x64', '@lydell/node-pty-win32-arm64']
@@ -15,6 +14,14 @@ function run(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(command + ' завершился с кодом ' + result.status)
+}
+
+function runNpm(args) {
+  if (process.env.npm_execpath) {
+    run(process.execPath, [process.env.npm_execpath, ...args])
+    return
+  }
+  run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args)
 }
 
 for (const packageName of packageNames) {
@@ -30,7 +37,7 @@ for (const packageName of packageNames) {
 
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'meowshell-win-pty-'))
   try {
-    run(npmCommand, ['pack', packageName + '@' + version, '--pack-destination', temp])
+    runNpm(['pack', packageName + '@' + version, '--pack-destination', temp])
     const archive = fs.readdirSync(temp).find((name) => name.endsWith('.tgz'))
     if (!archive) throw new Error('npm pack did not create an archive for ' + packageName)
     fs.mkdirSync(target, { recursive: true })
