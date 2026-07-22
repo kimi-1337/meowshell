@@ -70,4 +70,8 @@ jobs:
           rm artifacts/SHA256SUMS-x64.txt artifacts/SHA256SUMS-arm64.txt
           version="${GITHUB_REF_NAME#v}"
           zip -0 -j "artifacts/MeowShell-${version}-release-bundle.zip" artifacts/*.zip artifacts/*.exe artifacts/SHA256SUMS.txt LICENSE README.md README.ru.md
-          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "MeowShell $GITHUB_REF_NAME (Beta)" --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload."
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "MeowShell $GITHUB_REF_NAME (Beta)" --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload."
+          fi
