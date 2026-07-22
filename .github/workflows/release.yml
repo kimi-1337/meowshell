@@ -56,6 +56,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -67,4 +68,6 @@ jobs:
         run: |
           cat artifacts/SHA256SUMS-*.txt | sort > artifacts/SHA256SUMS.txt
           rm artifacts/SHA256SUMS-x64.txt artifacts/SHA256SUMS-arm64.txt
+          version="${GITHUB_REF_NAME#v}"
+          zip -0 -j "artifacts/MeowShell-${version}-release-bundle.zip" artifacts/*.zip artifacts/*.exe artifacts/SHA256SUMS.txt LICENSE README.md README.ru.md
           gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "MeowShell $GITHUB_REF_NAME (Beta)" --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload."
