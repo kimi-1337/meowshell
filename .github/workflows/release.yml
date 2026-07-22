@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run verify
+      - run: npm run ensure:win-pty
+      - name: Build ZIP and NSIS installer
+        shell: pwsh
+        run: npx electron-builder --win zip nsis --${{ matrix.arch }}
+      - name: Create architecture checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/*.zip,dist/*.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Add-Content "dist/SHA256SUMS-${{ matrix.arch }}.txt"
+          }
+      - uses: actions/attest-build-provenance@v3
+        if: github.event.repository.private == false
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat artifacts/SHA256SUMS-*.txt | sort > artifacts/SHA256SUMS.txt
+          rm artifacts/SHA256SUMS-x64.txt artifacts/SHA256SUMS-arm64.txt
+          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "MeowShell $GITHUB_REF_NAME (Beta)" --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload."

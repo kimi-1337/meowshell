@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' app: data:; font-src 'self' app: data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>MeowShell</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="theme-dark">
+  <div id="app">
+    <div id="titlebar">
+      <img id="tb-logo" src="../../assets/logo.png" alt="">
+      <div id="tb-name">MeowShell</div>
+      <div id="tabbar">
+        <button id="btn-sidebar" class="btn small" title="Скрыть/показать панель"><i class=ic-menu></i></button>
+        <div id="tabs"></div>
+        <button id="btn-split" class="btn small hidden" title="Сплит (Ctrl+Shift+D)"><i class=ic-split></i></button>
+        <button id="btn-sftp" class="btn small hidden">SFTP</button>
+      </div>
+      <div id="tb-controls">
+        <button id="tb-min" title="Свернуть"><svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+        <button id="tb-max" title="Развернуть"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1"/></svg></button>
+        <button id="tb-close" title="Закрыть"><svg viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5"/></svg></button>
+      </div>
+    </div>
+    <div id="workarea">
+    <aside id="sidebar">
+      <div class="side-title"><img class="side-logo" src="../../assets/logo.png" alt=""> MeowShell</div>
+      <button id="btn-new-local" class="btn primary"><i class=ic-plus></i> Локальный терминал</button>
+      <button id="btn-new-ssh" class="btn"><i class=ic-globe></i> SSH подключение</button>
+      <div class="side-section">Сохранённые серверы</div>
+      <div id="conn-list"></div>
+      <div class="side-bottom">
+        <button id="btn-settings" class="btn ghost"><i class=ic-sliders></i> Настройки</button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="snippets-bar">
+        <div id="snippets"></div>
+        <button id="btn-snippet-add" class="btn small" title="Добавить быструю команду"><i class=ic-plus></i> команда</button>
+        <button id="btn-snippet-lib" class="btn small" title="Библиотека готовых команд"><i class=ic-book></i> Библиотека</button>
+      </div>
+      <div id="content">
+        <div id="terms">
+          <div id="empty-state">
+            <img id="empty-cat" src="../../assets/logo.png" alt="">
+            <h1>MeowShell</h1>
+            <p><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> — новый терминал · <kbd>Ctrl</kbd>+<kbd>Tab</kbd> — переключение вкладок</p>
+            <p><kbd>Ctrl</kbd>+<kbd>F</kbd> — поиск · <kbd>Ctrl</kbd>+<kbd>V</kbd> — вставка скриншота/файла как пути</p>
+          </div>
+          <div id="searchbar" class="hidden">
+            <input id="search-input" placeholder="Поиск… (Enter — далее)" spellcheck="false">
+            <button id="search-prev" class="btn small" title="Назад"><i class=ic-arrow-up></i></button>
+            <button id="search-next" class="btn small" title="Далее"><i class=ic-arrow-down></i></button>
+            <button id="search-close" class="btn small" title="Закрыть"><i class=ic-x></i></button>
+          </div>
+        </div>
+        <div id="sftp-panel" class="collapsed">
+          <div class="sftp-head">
+            <button id="sftp-up" class="btn small" title="Вверх"><i class=ic-arrow-up></i></button>
+            <input id="sftp-path" value="." spellcheck="false">
+            <button id="sftp-go" class="btn small" title="Перейти"><i class=ic-arrow-right></i></button>
+          </div>
+          <div class="sftp-actions">
+            <button id="sftp-upload" class="btn small"><i class=ic-upload></i> Загрузить сюда</button>
+            <button id="sftp-mkdir" class="btn small" title="Новая папка"><i class=ic-folder-plus></i></button>
+            <button id="sftp-refresh" class="btn small"><i class=ic-refresh></i></button>
+          </div>
+          <div id="sftp-mkdir-row" class="hidden">
+            <input id="sftp-mkdir-name" placeholder="имя папки — Enter" spellcheck="false">
+          </div>
+          <div id="sftp-progress"></div>
+          <div id="sftp-list"></div>
+        </div>
+      </div>
+    </main>
+    </div><!-- /workarea -->
+  </div>
+
+  <!-- Модалка SSH -->
+  <div id="modal-ssh" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>SSH подключение</h2>
+      <label>Название (для списка)
+        <input id="ssh-name" placeholder="Мой VPS" spellcheck="false">
+      </label>
+      <div class="row">
+        <label class="grow">Хост
+          <input id="ssh-host" placeholder="example.com или 1.2.3.4" spellcheck="false">
+        </label>
+        <label class="w80">Порт
+          <input id="ssh-port" value="22" spellcheck="false">
+        </label>
+      </div>
+      <label>Пользователь
+        <input id="ssh-user" placeholder="root" spellcheck="false">
+      </label>
+      <label>Способ входа
+        <select id="ssh-auth">
+          <option value="password">Пароль</option>
+          <option value="key">Приватный ключ</option>
+        </select>
+      </label>
+      <label id="ssh-password-row">Пароль
+        <input id="ssh-password" type="password">
+      </label>
+      <div id="ssh-key-rows" class="hidden">
+        <div class="row">
+          <label class="grow">Путь к ключу
+            <input id="ssh-keypath" placeholder="C:\Users\...\.ssh\id_ed25519" spellcheck="false">
+          </label>
+          <button id="ssh-keypick" class="btn small self-end">Обзор…</button>
+        </div>
+        <label>Пароль от ключа (если есть)
+          <input id="ssh-passphrase" type="password">
+        </label>
+      </div>
+      <label class="check"><input id="ssh-save" type="checkbox" checked> Сохранить в список</label>
+      <label class="check"><input id="ssh-savepass" type="checkbox"> Сохранить пароль (шифруется)</label>
+      <div class="modal-actions">
+        <button id="ssh-cancel" class="btn ghost">Отмена</button>
+        <button id="ssh-connect" class="btn primary">Подключиться</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модалка быстрой команды -->
+  <div id="modal-snippet" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>Быстрая команда</h2>
+      <label>Название кнопки
+        <input id="snip-name" placeholder="Логи nginx" spellcheck="false">
+      </label>
+      <label>Команда
+        <input id="snip-cmd" placeholder="tail -f /var/log/nginx/error.log" spellcheck="false">
+      </label>
+      <label class="check"><input id="snip-enter" type="checkbox" checked> Нажимать Enter после вставки</label>
+      <div class="modal-actions">
+        <button id="snip-cancel" class="btn ghost">Отмена</button>
+        <button id="snip-save" class="btn primary">Добавить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
+  <script src="../../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+  <script src="../../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+  <script src="i18n.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

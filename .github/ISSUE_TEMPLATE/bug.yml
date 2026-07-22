@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible MeowShell problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include passwords, private keys, tokens, or sensitive host details.
+  - type: input
+    id: version
+    attributes:
+      label: MeowShell version
+      placeholder: 2.3.0-beta.1
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Windows architecture
+      options: [x64, ARM64]
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Review and redact logs before attaching them.
