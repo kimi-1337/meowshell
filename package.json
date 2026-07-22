@@ -19,7 +19,7 @@
   "scripts": {
     "start": "electron .",
     "check": "node scripts/check.js",
-    "test": "node --test test",
+    "test": "node --test",
     "verify": "npm run check && npm test",
     "ensure:win-pty": "node scripts/ensure-win-pty.js",
     "dist": "npm run verify && npm run ensure:win-pty && electron-builder --win zip nsis --x64 --arm64",
