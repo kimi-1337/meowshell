@@ -5,6 +5,20 @@
 
 [Русская версия](README.ru.md)
 
+## Download
+
+### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-win-x64-setup.exe)
+
+| Package | Download |
+|---|---|
+| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-win-x64-setup.exe) |
+| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-win-x64-portable.zip) |
+| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-win-arm64-setup.exe) |
+| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-win-arm64-portable.zip) |
+| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.1/MeowShell-2.3.0-beta.1-release-bundle.zip) |
+
+[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.1)
+
 MeowShell is a private, customizable desktop terminal for Windows. It combines
 local shell tabs, SSH, SFTP, split panes, tunnels, monitoring, themes, and quick
 commands in one Electron application.
