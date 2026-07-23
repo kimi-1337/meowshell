@@ -36,6 +36,14 @@ if (!/Content-Security-Policy/.test(html)) fail('В index.html отсутств�
 const renderer = read('src/renderer/renderer.js')
 const preload = read('src/main/preload.js')
 const main = read('src/main/main.js')
+const onboarding = renderer.match(/function showOnboarding\(\)[\s\S]*?\n}\n/)
+if (!onboarding) fail('Не найдена реализация first-run onboarding')
+else {
+  if (!onboarding[0].includes("d.m.querySelectorAll('[data-action]')")) {
+    fail('Кнопки onboarding должны привязываться к DOM-элементу d.m')
+  }
+  if (!onboarding[0].includes('d.close()')) fail('Диалог onboarding должен закрываться через d.close()')
+}
 const usedApi = new Set([...renderer.matchAll(/window\.api\.([A-Za-z0-9_]+)/g)].map((m) => m[1]))
 const exposedApi = new Set([...preload.matchAll(/^\s*([A-Za-z0-9_]+):/gm)].map((m) => m[1]))
 for (const name of usedApi) if (!exposedApi.has(name)) fail('Renderer API не объявлен в preload: ' + name)

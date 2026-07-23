@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0-beta.2
+
+- fixed all first-run onboarding buttons by binding their click handlers to the
+  actual dialog element;
+- added a regression check for onboarding dialog wiring.
+
 ## 2.3.0-beta.1
 
 - added complete Russian and English interfaces with automatic system-language detection;

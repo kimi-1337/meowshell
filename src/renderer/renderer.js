@@ -1685,7 +1685,7 @@ function settingsPaneHtml() {
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
       <div class="set-card">
-        <div class="set-hint">MeowShell v2.3.0-beta.1 · Electron + xterm.js</div>
+        <div class="set-hint">MeowShell v2.3.0-beta.2 · Electron + xterm.js</div>
       </div>
     </section>
   </div>
@@ -2450,11 +2450,11 @@ closeTab = function (id, killSession) {
 function showOnboarding() {
   return new Promise((resolve) => {
     const d = makeDialog('<h2>Первый запуск</h2><p>Выбери, с чего начать</p><div class="onboarding-actions"><button class="btn primary" data-action="local">Открыть локальный терминал</button><button class="btn" data-action="ssh">Добавить SSH-сервер</button><button class="btn" data-action="tabby">Импортировать из Tabby</button></div><div class="modal-actions"><button class="btn ghost" data-action="later">Не сейчас</button></div>')
-    d.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
+    d.m.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
       settings.onboardingComplete = true
       window.api.saveSettings(settings)
       const action = button.dataset.action
-      d.remove()
+      d.close()
       resolve(action)
     }))
   })
