@@ -29,7 +29,7 @@ jobs:
       - run: npm run ensure:win-pty
       - name: Build ZIP and NSIS installer
         shell: pwsh
-        run: npx electron-builder --win zip nsis --${{ matrix.arch }}
+        run: npx electron-builder --win zip nsis --${{ matrix.arch }} --publish never
       - name: Create architecture checksums
         shell: pwsh
         run: |
