@@ -24,7 +24,8 @@ jobs:
           node-version: 22.12
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=high
+      - name: Audit packaged dependencies
+        run: npm audit --omit=dev --audit-level=high
       - run: npm run verify
       - run: npm run ensure:win-pty
       - name: Build ZIP and NSIS installer

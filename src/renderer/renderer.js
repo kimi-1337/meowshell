@@ -78,6 +78,7 @@ let settings = {
   cursorStyle: 'block',
   cursorBlink: true,
   scrollback: 5000,
+  altWheel: 'page',
   copyOnSelect: true,
   smoothCursor: true,
   webglRenderer: false,
@@ -208,25 +209,32 @@ function makeTerm(sessId, tab, slot, cellEl) {
     }
     return true
   })
-  // v2.1.1: колёсико в полноэкранных программах (Claude Code, vim, htop и т.п.).
-  // По умолчанию xterm превращает прокрутку в пачку стрелок (ещё и умножая на
-  // «скорость прокрутки») — диалоги скачут. Шлём ровно одну стрелку за щелчок.
+  // Колёсико в полноэкранных программах (Claude Code, Codex, vim, htop и т.п.).
+  // Если приложение включило mouse tracking, xterm передаст ему настоящее wheel-событие.
+  // Иначе безопасный режим использует PageUp/PageDown: стрелки в Claude/Codex меняют
+  // историю ввода вместо прокрутки диалога.
   let altWheelAcc = 0
   if (term.attachCustomWheelEventHandler) {
     term.attachCustomWheelEventHandler((ev) => {
       try {
         if (term.buffer.active.type !== 'alternate') return true // обычная история — скроллим как всегда
         if (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none') return true // программа сама обрабатывает мышь
-        const mode = settings.altWheel || 'one'
+        if (!ev.deltaY || ev.shiftKey) return true
+        const mode = settings.altWheel || 'page'
         if (mode === 'xterm') return true // старое поведение
-        if (mode === 'off') return false // вообще не слать
-        const step = ev.deltaMode === 1 ? 1 : 100 // строки или пиксели (~100px = один щелчок)
+        if (mode === 'off') {
+          ev.preventDefault()
+          return false // вообще не слать
+        }
+        if (altWheelAcc && Math.sign(altWheelAcc) !== Math.sign(ev.deltaY)) altWheelAcc = 0
+        const step = ev.deltaMode === 1 ? 1 : ev.deltaMode === 2 ? 1 : 80
         altWheelAcc += ev.deltaY
         const appMode = term.modes && term.modes.applicationCursorKeysMode
-        const up = appMode ? '\x1bOA' : '\x1b[A'
-        const down = appMode ? '\x1bOB' : '\x1b[B'
+        const up = mode === 'one' ? (appMode ? '\x1bOA' : '\x1b[A') : '\x1b[5~'
+        const down = mode === 'one' ? (appMode ? '\x1bOB' : '\x1b[B') : '\x1b[6~'
         while (altWheelAcc <= -step) { routeInput(sessId, up); altWheelAcc += step }
         while (altWheelAcc >= step) { routeInput(sessId, down); altWheelAcc -= step }
+        ev.preventDefault()
         return false
       } catch { return true }
     })
@@ -1625,7 +1633,7 @@ function settingsPaneHtml() {
       <div class="set-card">
         <div class="set-row"><label>История прокрутки (строк)</label><input id="st-scrollback" type="number" min="500" max="100000" step="500"></div>
         <div class="set-row"><label>Скорость прокрутки колёсиком</label><input id="st-scrollsens" type="number" min="1" max="10"></div>
-        <div class="set-row"><label>Колёсико в программах (vim, Claude Code)</label><select id="st-altwheel"><option value="one">По одной стрелке (плавно)</option><option value="xterm">Как раньше (пачкой)</option><option value="off">Не листать</option></select></div>
+        <div class="set-row"><label>Колёсико в полноэкранных программах</label><select id="st-altwheel"><option value="page">PageUp/PageDown (рекомендуется для Claude/Codex)</option><option value="one">По одной стрелке (совместимость)</option><option value="xterm">Стрелками пачкой (режим xterm)</option><option value="off">Отключить</option></select></div>
         <div class="set-row"><label>Копировать при выделении</label><input id="st-copyselect" type="checkbox"></div>
         <div class="set-row"><label>Вставка правой кнопкой мыши</label><input id="st-rightpaste" type="checkbox"></div>
         <div class="set-row"><label>Ctrl+C копирует выделение</label><input id="st-ctrlccopy" type="checkbox"></div>
@@ -1685,7 +1693,7 @@ function settingsPaneHtml() {
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
       <div class="set-card">
-        <div class="set-hint">MeowShell v2.3.0-beta.2 · Electron + xterm.js</div>
+        <div class="set-hint">MeowShell v2.3.0-beta.3 · Electron + xterm.js</div>
       </div>
     </section>
   </div>
@@ -1745,7 +1753,7 @@ function buildSettingsPane(paneEl) {
   q('#st-smoothcursor').checked = settings.smoothCursor !== false
   q('#st-scrollback').value = settings.scrollback
   q('#st-scrollsens').value = settings.scrollSensitivity || 1
-  q('#st-altwheel').value = settings.altWheel || 'one'
+  q('#st-altwheel').value = settings.altWheel || 'page'
   q('#st-copyselect').checked = !!settings.copyOnSelect
   q('#st-rightpaste').checked = settings.rightClickPaste !== false
   q('#st-ctrlccopy').checked = settings.ctrlCCopy !== false

@@ -44,6 +44,19 @@ else {
   }
   if (!onboarding[0].includes('d.close()')) fail('Диалог onboarding должен закрываться через d.close()')
 }
+const wheelHandler = renderer.match(/let altWheelAcc = 0[\s\S]*?term\.onBell/)
+if (!wheelHandler) fail('Не найден обработчик колёсика полноэкранных программ')
+else {
+  if (!wheelHandler[0].includes("settings.altWheel || 'page'")) {
+    fail('Безопасным режимом колёсика должен быть PageUp/PageDown')
+  }
+  if (!wheelHandler[0].includes("'\\x1b[5~'") || !wheelHandler[0].includes("'\\x1b[6~'")) {
+    fail('Обработчик колёсика должен отправлять PageUp/PageDown вместо стрелок')
+  }
+  if (!wheelHandler[0].includes("mouseTrackingMode !== 'none'")) {
+    fail('Программы с mouse tracking должны получать нативные wheel-события')
+  }
+}
 const usedApi = new Set([...renderer.matchAll(/window\.api\.([A-Za-z0-9_]+)/g)].map((m) => m[1]))
 const exposedApi = new Set([...preload.matchAll(/^\s*([A-Za-z0-9_]+):/gm)].map((m) => m[1]))
 for (const name of usedApi) if (!exposedApi.has(name)) fail('Renderer API не объявлен в preload: ' + name)

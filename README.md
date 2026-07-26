@@ -7,17 +7,17 @@
 
 ## Download
 
-### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-win-x64-setup.exe)
+### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe)
 
 | Package | Download |
 |---|---|
-| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-win-x64-setup.exe) |
-| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-win-x64-portable.zip) |
-| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-win-arm64-setup.exe) |
-| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-win-arm64-portable.zip) |
-| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.2/MeowShell-2.3.0-beta.2-release-bundle.zip) |
+| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe) |
+| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-portable.zip) |
+| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-setup.exe) |
+| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-portable.zip) |
+| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-release-bundle.zip) |
 
-[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.2)
+[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.3)
 
 MeowShell is a private, customizable desktop terminal for Windows. It combines
 local shell tabs, SSH, SFTP, split panes, tunnels, monitoring, themes, and quick
@@ -29,7 +29,7 @@ See [PRIVACY.md](PRIVACY.md) for the exact policy.
 
 ## Status and compatibility
 
-- Release: `2.3.0-beta.2`
+- Release: `2.3.0-beta.3`
 - Packages: Windows x64 and Windows ARM64
 - Formats: NSIS installer and extracted portable ZIP
 - Confirmed hardware test: Windows 10 x64, NVIDIA GPU, AMD CPU

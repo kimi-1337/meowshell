@@ -495,12 +495,18 @@ handleIpc('session:create-local', (e, opts = {}) => {
   }
   let p
   try {
+    const terminalEnv = Object.assign({}, process.env, {
+      TERM: process.env.TERM || 'xterm-256color',
+      COLORTERM: process.env.COLORTERM || 'truecolor',
+      TERM_PROGRAM: 'MeowShell',
+      TERM_PROGRAM_VERSION: app.getVersion(),
+    })
     p = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols: Math.min(1000, Math.max(2, Number(opts.cols) || 80)),
       rows: Math.min(500, Math.max(1, Number(opts.rows) || 24)),
       cwd: os.homedir(),
-      env: process.env,
+      env: terminalEnv,
     })
   } catch (err) {
     return { error: 'Не удалось запустить "' + shell + '": ' + err.message }

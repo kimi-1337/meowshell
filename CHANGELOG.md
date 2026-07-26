@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0-beta.3
+
+- fixed mouse-wheel scrolling in Claude Code, Codex, and other full-screen TUIs:
+  applications with mouse tracking receive native wheel events, while the fallback
+  now sends PageUp/PageDown instead of input-history arrow keys;
+- exposed the legacy arrow-key modes only as explicit compatibility options;
+- local sessions now advertise `xterm-256color`, true color, and MeowShell terminal
+  metadata to child CLI applications.
+
 ## 2.3.0-beta.2
 
 - fixed all first-run onboarding buttons by binding their click handlers to the
