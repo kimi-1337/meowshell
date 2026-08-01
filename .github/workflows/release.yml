@@ -38,7 +38,7 @@ jobs:
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)" | Add-Content "dist/SHA256SUMS-${{ matrix.arch }}.txt"
           }
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         if: github.event.repository.private == false
         with:
           subject-path: |
