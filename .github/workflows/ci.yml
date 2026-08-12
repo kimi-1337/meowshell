@@ -33,8 +33,3 @@ jobs:
           $process = Start-Process $exe.FullName -ArgumentList "--meowshell-ci-smoke", "--user-data-dir=$profile" -PassThru
           if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Smoke test timed out" }
           if ($process.ExitCode -ne 0) { throw "Smoke test failed with exit code $($process.ExitCode)" }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: meowshell-windows-x64-smoke
-          path: dist/*-x64-portable.zip
-          if-no-files-found: error
