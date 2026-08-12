@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
   sftpUpload: (id, remoteDir) => ipcRenderer.invoke('sftp:upload', { id, remoteDir }),
-  sftpMkdir: (id, path) => ipcRenderer.invoke('sftp:mkdir', { id, path }),
+  sftpMkdir: (id, parent, name) => ipcRenderer.invoke('sftp:mkdir', { id, parent, name }),
   grantUploadFiles: (files) => ipcRenderer.invoke('files:grant-upload', Array.from(files || []).map((file) => {
     try { return webUtils.getPathForFile(file) } catch { return '' }
   }).filter(Boolean)),

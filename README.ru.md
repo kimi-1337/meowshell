@@ -8,29 +8,30 @@
 
 ## Скачать
 
-### [Скачать MeowShell для Windows x64 — установщик (рекомендуется)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe)
+### [Скачать MeowShell для Windows x64 — установщик (рекомендуется)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe)
 
 | Версия | Скачать |
 |---|---|
-| Windows x64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe) |
-| Windows x64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-portable.zip) |
-| Windows ARM64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-setup.exe) |
-| Windows ARM64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-portable.zip) |
-| Полный комплект релиза | [Скачать общий `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-release-bundle.zip) |
+| Windows x64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe) |
+| Windows x64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-portable.zip) |
+| Windows ARM64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-setup.exe) |
+| Windows ARM64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-portable.zip) |
+| Полный комплект релиза | [Скачать общий `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-release-bundle.zip) |
 
-[Все файлы релиза и контрольные суммы SHA-256](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.3)
+[Все файлы релиза и контрольные суммы SHA-256](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
 
 MeowShell — приватный и настраиваемый настольный терминал для Windows. Он
 объединяет локальные вкладки, SSH, SFTP, сплиты, туннели, мониторинг, темы и
 быстрые команды.
 
 В приложении нет телеметрии, слежения, облачной синхронизации и автоматической
-отправки crash-отчётов. Сетевые подключения выполняются только после действия
-пользователя. Точная политика описана в [PRIVACY.md](PRIVACY.md).
+отправки crash-отчётов. Сетевые подключения выполняются после действия
+пользователя либо при явно включённом восстановлении SSH-вкладок и туннелей при
+запуске. Точная политика описана в [PRIVACY.md](PRIVACY.md).
 
 ## Статус и совместимость
 
-- Версия: `2.3.0-beta.3`
+- Версия: `2.3.0-beta.4`
 - Сборки: Windows x64 и Windows ARM64
 - Форматы: NSIS-установщик и portable ZIP с каталогом приложения
 - Проверенная конфигурация: Windows 10 x64, NVIDIA GPU, AMD CPU
@@ -50,16 +51,17 @@ Windows x86/32-bit не выпускается: x86 и x32 — одно и то 
 - переподключение SSH, локальные туннели и мониторинг Linux-сервера;
 - broadcast-ввод, командная палитра, поиск и защита многострочной вставки;
 - вставка скриншота/файла как правильно экранированного пути;
-- темы, фоны, свои шрифты, эффекты ввода и quake-режим;
+- темы, фоны, свои шрифты, плавная анимация текста при вводе/выводе, эффекты ввода и quake-режим;
 - поиск по настройкам, локальная диагностика и GPU safe mode;
-- экспорт/импорт конфигурации без секретов и резервные копии перед сбросом.
+- экспорт/импорт конфигурации без секретов, восстановление исправной локальной
+  копии и полный сброс без сохранения резервной копии.
 
 ## Установка и portable-версия
 
 Скачай файл своей архитектуры в GitHub Releases:
 
-- `*-nsis.exe` — обычный интерактивный установщик для текущего пользователя;
-- `*-zip.zip` — portable-каталог: распакуй его в постоянную папку и запусти
+- `*-setup.exe` — обычный интерактивный установщик для текущего пользователя;
+- `*-portable.zip` — portable-каталог: распакуй его в постоянную папку и запусти
   `MeowShell.exe`.
 
 Не запускай приложение прямо из временной папки архиватора. Пока сборки не

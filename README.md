@@ -7,29 +7,30 @@
 
 ## Download
 
-### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe)
+### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe)
 
 | Package | Download |
 |---|---|
-| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-setup.exe) |
-| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-x64-portable.zip) |
-| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-setup.exe) |
-| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-win-arm64-portable.zip) |
-| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.3/MeowShell-2.3.0-beta.3-release-bundle.zip) |
+| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe) |
+| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-portable.zip) |
+| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-setup.exe) |
+| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-portable.zip) |
+| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-release-bundle.zip) |
 
-[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.3)
+[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
 
 MeowShell is a private, customizable desktop terminal for Windows. It combines
 local shell tabs, SSH, SFTP, split panes, tunnels, monitoring, themes, and quick
 commands in one Electron application.
 
 The application contains no telemetry, tracking, cloud synchronization, or
-automatic crash upload. Network connections happen only after a user action.
+automatic crash upload. Network connections happen after a user action or when
+the user has explicitly enabled startup restoration for SSH tabs and tunnels.
 See [PRIVACY.md](PRIVACY.md) for the exact policy.
 
 ## Status and compatibility
 
-- Release: `2.3.0-beta.3`
+- Release: `2.3.0-beta.4`
 - Packages: Windows x64 and Windows ARM64
 - Formats: NSIS installer and extracted portable ZIP
 - Confirmed hardware test: Windows 10 x64, NVIDIA GPU, AMD CPU
@@ -50,16 +51,17 @@ by CI but should be treated as beta until it receives a real-device test.
 - SSH reconnect, local port forwarding, and optional Linux resource monitoring
 - Broadcast input, command palette, terminal search, and guarded multiline paste
 - Screenshot/file paste as a correctly quoted local or remote path
-- Themes, backgrounds, custom fonts, typing effects, and quake mode
+- Themes, backgrounds, custom fonts, smooth input/output text animation, typing effects, and quake mode
 - Settings search, local diagnostics, GPU safe mode, and first-run onboarding
-- Secret-free configuration export/import with automatic backups before reset
+- Secret-free configuration export/import, recovery from a valid local backup,
+  and a deliberate no-backup full-data reset
 
 ## Install or run the portable build
 
 Download the artifact for your architecture from GitHub Releases:
 
-- `*-nsis.exe` — interactive per-user installer
-- `*-zip.zip` — portable folder; extract it to a permanent directory, then run
+- `*-setup.exe` — interactive per-user installer
+- `*-portable.zip` — portable folder; extract it to a permanent directory, then run
   `MeowShell.exe`
 
 Do not run the extracted application from a temporary archive directory. Releases

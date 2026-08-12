@@ -6,13 +6,20 @@ function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-function cleanValue(value) {
-  if (Array.isArray(value)) return value.map(cleanValue)
+function cleanValue(value, state = { entries: 0 }, depth = 0) {
+  if (depth > 32) throw new Error('Конфигурация имеет слишком большую глубину')
+  if (Array.isArray(value)) {
+    state.entries += value.length
+    if (state.entries > 100000) throw new Error('Конфигурация содержит слишком много элементов')
+    return value.map((item) => cleanValue(item, state, depth + 1))
+  }
   if (!value || typeof value !== 'object') return value
   const out = {}
   for (const [key, item] of Object.entries(value)) {
     if (key === '__proto__' || key === 'prototype' || key === 'constructor') continue
-    out[key] = cleanValue(item)
+    state.entries++
+    if (state.entries > 100000) throw new Error('Конфигурация содержит слишком много элементов')
+    out[key] = cleanValue(item, state, depth + 1)
   }
   return out
 }
@@ -21,7 +28,7 @@ function normalizeConfig(value) {
   const cfg = asObject(value)
   return {
     connections: Array.isArray(cfg.connections)
-      ? cfg.connections.filter((item) => item && typeof item === 'object').map(cleanValue)
+      ? cfg.connections.filter((item) => item && typeof item === 'object').slice(0, 10000).map((item) => cleanValue(item))
       : [],
     settings: cleanValue(asObject(cfg.settings)),
     knownHosts: cleanValue(asObject(cfg.knownHosts)),
@@ -36,6 +43,27 @@ function safeEntryName(value) {
     throw new Error('Удалённый сервер вернул небезопасное имя файла')
   }
   return name
+}
+
+function safeRemoteEntryName(value) {
+  const name = String(value || '')
+  if (!name || name === '.' || name === '..' || /[\/\0]/.test(name) || Buffer.byteLength(name, 'utf8') > 255) {
+    throw new Error('Небезопасное имя удалённого файла')
+  }
+  return name
+}
+
+function normalizeRemotePath(value) {
+  const source = String(value || '')
+  if (!source || source.length > 4096 || source.includes('\0')) throw new Error('Некорректный удалённый путь')
+  const normalized = path.posix.normalize(source)
+  if (!normalized || normalized.length > 4096) throw new Error('Некорректный удалённый путь')
+  return normalized
+}
+
+function isDangerousRemoteTarget(value) {
+  const normalized = normalizeRemotePath(value)
+  return normalized === '/' || normalized === '.' || normalized === '..' || normalized.startsWith('../')
 }
 
 function resolveLocalChild(base, name) {
@@ -78,9 +106,12 @@ function validPort(value, fallback) {
 
 module.exports = {
   normalizeConfig,
+  normalizeRemotePath,
+  isDangerousRemoteTarget,
   quotePathForShell,
   quotePosix,
   resolveLocalChild,
   safeEntryName,
+  safeRemoteEntryName,
   validPort,
 }

@@ -81,6 +81,7 @@ let settings = {
   altWheel: 'page',
   copyOnSelect: true,
   smoothCursor: true,
+  smoothTextAnimation: true,
   webglRenderer: false,
   typingFx: 'glow',
   lineHeight: 1.0,
@@ -182,6 +183,7 @@ function makeTerm(sessId, tab, slot, cellEl) {
   }
   term.onData((data) => {
     routeInput(sessId, data)
+    animateTerminalText(term, 'input', data.length)
     typingFx(term)
   })
   // плавная анимация курсора
@@ -254,11 +256,26 @@ function makeTerm(sessId, tab, slot, cellEl) {
 
 function addTab(id, title, type, sshCfg) {
   const tabEl = document.createElement('div')
+  const tabDomId = 'terminal-tab-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '-')
   tabEl.className = 'tab'
+  tabEl.id = tabDomId
+  tabEl.setAttribute('role', 'tab')
+  tabEl.tabIndex = -1
   const badge = type === 'ssh' ? '<span class="tab-dot ok" title="Подключено"></span><span class="tab-badge">SSH</span>' : ''
   tabEl.innerHTML = badge + '<span class="tab-title"></span><button class="tab-close" title="Закрыть"><i class=ic-x></i></button>'
   tabEl.querySelector('.tab-title').textContent = title
   tabEl.addEventListener('click', () => activateTab(tab.id))
+  tabEl.addEventListener('keydown', (event) => {
+    if (event.target !== tabEl) return
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activateTab(tab.id) }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      const ids = [...tabs.keys()]
+      const index = ids.indexOf(tab.id)
+      const next = ids[(index + (event.key === 'ArrowRight' ? 1 : -1) + ids.length) % ids.length]
+      if (next) { activateTab(next); tabs.get(next).tabEl.focus() }
+    }
+  })
   tabEl.querySelector('.tab-close').addEventListener('click', (e) => {
     e.stopPropagation()
     closeTab(tab.id, true)
@@ -267,6 +284,8 @@ function addTab(id, title, type, sshCfg) {
 
   const paneEl = document.createElement('div')
   paneEl.className = 'term-pane hidden'
+  paneEl.setAttribute('role', 'tabpanel')
+  paneEl.setAttribute('aria-labelledby', tabDomId)
   $('#terms').appendChild(paneEl)
 
   const cellEl = document.createElement('div')
@@ -310,6 +329,8 @@ function activateTab(id) {
   for (const t of tabs.values()) {
     const isActive = t.id === id
     t.tabEl.classList.toggle('active', isActive)
+    t.tabEl.setAttribute('aria-selected', String(isActive))
+    t.tabEl.tabIndex = isActive ? 0 : -1
     t.paneEl.classList.toggle('hidden', !isActive)
   }
   $('#btn-sftp').classList.toggle('hidden', tab.type !== 'ssh')
@@ -441,6 +462,7 @@ window.api.onData(({ id, data }) => {
     fc.paused = true
     window.api.pauseStream(id)
   }
+  animateTerminalText(term, 'output', data.length)
   term.write(data, () => {
     fc.pending -= data.length
     if (fc.paused && fc.pending < FLOW_LOW) {
@@ -567,6 +589,8 @@ function renderConnections() {
   for (const conn of connections) {
     const item = document.createElement('div')
     item.className = 'conn-item'
+    item.setAttribute('role', 'button')
+    item.tabIndex = 0
     item.innerHTML = '<span class="conn-name"></span><span class="conn-host"></span><button class="conn-del" title="Удалить"><i class=ic-x></i></button>'
     item.querySelector('.conn-name').textContent = conn.name
     item.querySelector('.conn-host').textContent = conn.host
@@ -579,6 +603,10 @@ function renderConnections() {
       toast('IP скопирован: ' + conn.host)
     })
     item.addEventListener('click', () => connectSaved(conn))
+    item.addEventListener('keydown', (event) => {
+      if (event.target !== item) return
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); connectSaved(conn) }
+    })
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       showCtxMenu(e.clientX, e.clientY, connMenuItems(conn))
@@ -688,6 +716,12 @@ async function sftpList(dir) {
       showCtxMenu(ev.clientX, ev.clientY, sftpMenuItems(tab, entry, fullPath))
     })
     listEl.appendChild(row)
+  }
+  if (res.truncated) {
+    const message = document.createElement('div')
+    message.className = 'sftp-msg'
+    message.textContent = 'Показаны первые 10 000 элементов. Открой нужный путь вручную.'
+    listEl.appendChild(message)
   }
 }
 
@@ -842,8 +876,9 @@ async function init() {
   renderConnections()
   renderSnippets()
   updateEmptyState()
-  if (cfg.securityWarning) toast(cfg.securityWarning, true)
-  else if (rendererSafeMode) toast('Безопасный режим: GPU-рендеринг отключён после прошлого сбоя')
+  if (cfg.configNotice) toast(cfg.configNotice, true)
+  if (cfg.securityWarning) setTimeout(() => toast(cfg.securityWarning, true), cfg.configNotice ? 4300 : 0)
+  else if (rendererSafeMode) setTimeout(() => toast('Безопасный режим: GPU-рендеринг отключён после прошлого сбоя'), cfg.configNotice ? 4300 : 0)
 }
 
 const initPromise = init().catch((err) => {
@@ -948,8 +983,7 @@ $('#sftp-mkdir-name').addEventListener('keydown', async (e) => {
   const tab = tabs.get(activeId)
   const name = $('#sftp-mkdir-name').value.trim()
   if (!tab || tab.type !== 'ssh' || !name) return
-  const base = tab.sftpPath === '.' ? '' : tab.sftpPath.replace(/\/+$/, '') + '/'
-  const r = await window.api.sftpMkdir(tab.id, base + name)
+  const r = await window.api.sftpMkdir(tab.id, tab.sftpPath || '.', name)
   if (r.error) return toast('Ошибка: ' + r.error, true)
   $('#sftp-mkdir-name').value = ''
   $('#sftp-mkdir-row').classList.add('hidden')
@@ -1135,6 +1169,31 @@ function typingFx(term) {
   } catch {}
 }
 
+// Лёгкое появление текста при вводе и выводе. Web Animations не заставляет
+// пересобирать DOM xterm и отключается для reduced motion и больших потоков.
+const terminalTextMotion = new WeakMap()
+function animateTerminalText(term, kind, amount) {
+  if (settings.smoothTextAnimation === false || amount > 32768 ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  try {
+    const screen = term.element && term.element.querySelector('.xterm-screen')
+    if (!screen || !screen.animate || screen.closest('.term-pane.hidden')) return
+    const now = performance.now()
+    const state = terminalTextMotion.get(term) || { input: 0, output: 0 }
+    const interval = kind === 'input' ? 38 : 90
+    if (now - state[kind] < interval) return
+    state[kind] = now
+    terminalTextMotion.set(term, state)
+    const frames = kind === 'input'
+      ? [{ opacity: 0.94, filter: 'brightness(1.16)', transform: 'translateY(0.4px)' }, { opacity: 1, filter: 'brightness(1)', transform: 'translateY(0)' }]
+      : [{ opacity: 0.92, filter: 'brightness(1.08)', transform: 'translateY(1px)' }, { opacity: 1, filter: 'brightness(1)', transform: 'translateY(0)' }]
+    screen.animate(frames, {
+      duration: kind === 'input' ? 125 : 190,
+      easing: 'cubic-bezier(.2,.75,.25,1)',
+    })
+  } catch {}
+}
+
 // ---------- v0.7 ----------
 
 // Тема xterm с учётом фонового изображения (прозрачный фон терминала)
@@ -1269,10 +1328,42 @@ function makeDialog(innerHtml) {
   bd.className = 'modal-backdrop'
   const m = document.createElement('div')
   m.className = 'modal'
+  m.setAttribute('role', 'dialog')
+  m.setAttribute('aria-modal', 'true')
+  m.tabIndex = -1
   m.innerHTML = innerHtml
   bd.appendChild(m)
   document.body.appendChild(bd)
-  return { bd, m, close: () => bd.remove() }
+  const previousFocus = document.activeElement
+  const close = () => {
+    bd.remove()
+    if (previousFocus && previousFocus.isConnected && previousFocus.focus) previousFocus.focus()
+  }
+  bd.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      close()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = [...m.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  })
+  bd.addEventListener('mousedown', (event) => { if (event.target === bd) close() })
+  setTimeout(() => {
+    const heading = m.querySelector('h1, h2, h3')
+    if (heading) {
+      if (!heading.id) heading.id = 'dialog-title-' + Math.random().toString(36).slice(2)
+      m.setAttribute('aria-labelledby', heading.id)
+    }
+    const first = m.querySelector('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')
+    ;(first || m).focus()
+  }, 0)
+  return { bd, m, close }
 }
 
 function askInput(title, initial, cb) {
@@ -1526,12 +1617,23 @@ function openSettingsTab() {
   if (tabs.get('__settings__')) { activateTab('__settings__'); return }
   const tabEl = document.createElement('div')
   tabEl.className = 'tab'
+  tabEl.id = 'terminal-tab-settings'
+  tabEl.setAttribute('role', 'tab')
+  tabEl.tabIndex = -1
   tabEl.innerHTML = '<span class="tab-badge"><i class=ic-sliders></i></span><span class="tab-title">Настройки</span><button class="tab-close" title="Закрыть"><i class=ic-x></i></button>'
   tabEl.addEventListener('click', () => activateTab('__settings__'))
+  tabEl.addEventListener('keydown', (event) => {
+    if (event.target === tabEl && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault()
+      activateTab('__settings__')
+    }
+  })
   tabEl.querySelector('.tab-close').addEventListener('click', (e) => { e.stopPropagation(); closeTab('__settings__', false) })
   $('#tabs').appendChild(tabEl)
   const paneEl = document.createElement('div')
   paneEl.className = 'term-pane settings-pane hidden'
+  paneEl.setAttribute('role', 'tabpanel')
+  paneEl.setAttribute('aria-labelledby', 'terminal-tab-settings')
   $('#terms').appendChild(paneEl)
   const tab = {
     id: '__settings__', type: 'settings', title: 'Настройки', tabEl, paneEl,
@@ -1629,6 +1731,7 @@ function settingsPaneHtml() {
         </select></div>
         <div class="set-row"><label>Мигание курсора</label><input id="st-blink" type="checkbox"></div>
         <div class="set-row"><label>Плавный курсор-«призрак»</label><input id="st-smoothcursor" type="checkbox"></div>
+        <div class="set-row"><label>Плавная анимация текста при вводе и выводе</label><input id="st-smoothtext" type="checkbox"></div>
       </div>
       <div class="set-card">
         <div class="set-row"><label>История прокрутки (строк)</label><input id="st-scrollback" type="number" min="500" max="100000" step="500"></div>
@@ -1693,7 +1796,7 @@ function settingsPaneHtml() {
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
       <div class="set-card">
-        <div class="set-hint">MeowShell v2.3.0-beta.3 · Electron + xterm.js</div>
+        <div class="set-hint">MeowShell v2.3.0-beta.4 · Electron + xterm.js</div>
       </div>
     </section>
   </div>
@@ -1706,9 +1809,21 @@ function buildSettingsPane(paneEl) {
 
   // навигация по категориям
   paneEl.querySelectorAll('.set-nav-item').forEach((el) => {
+    el.setAttribute('role', 'button')
+    el.tabIndex = 0
     el.addEventListener('click', () => {
       paneEl.querySelectorAll('.set-nav-item').forEach((x) => x.classList.toggle('active', x === el))
       paneEl.querySelectorAll('.set-section').forEach((s) => s.classList.toggle('hidden', s.dataset.cat !== el.dataset.cat))
+    })
+    el.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el.click() }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        const items = [...paneEl.querySelectorAll('.set-nav-item')]
+        const index = items.indexOf(el)
+        const next = items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]
+        if (next) next.focus()
+      }
     })
   })
   q('#st-search').addEventListener('input', () => {
@@ -1751,6 +1866,7 @@ function buildSettingsPane(paneEl) {
   q('#st-cursor').value = settings.cursorStyle
   q('#st-blink').checked = !!settings.cursorBlink
   q('#st-smoothcursor').checked = settings.smoothCursor !== false
+  q('#st-smoothtext').checked = settings.smoothTextAnimation !== false
   q('#st-scrollback').value = settings.scrollback
   q('#st-scrollsens').value = settings.scrollSensitivity || 1
   q('#st-altwheel').value = settings.altWheel || 'page'
@@ -1821,6 +1937,7 @@ function buildSettingsPane(paneEl) {
   q('#st-cursor').addEventListener('change', () => { settings.cursorStyle = q('#st-cursor').value; applyAllSettings() })
   q('#st-blink').addEventListener('change', () => { settings.cursorBlink = q('#st-blink').checked; applyAllSettings() })
   q('#st-smoothcursor').addEventListener('change', () => { settings.smoothCursor = q('#st-smoothcursor').checked; applyAllSettings() })
+  q('#st-smoothtext').addEventListener('change', () => { settings.smoothTextAnimation = q('#st-smoothtext').checked; applyAllSettings() })
   q('#st-scrollback').addEventListener('change', () => { settings.scrollback = Math.min(100000, Math.max(500, Number(q('#st-scrollback').value) || 5000)); applyAllSettings() })
   q('#st-scrollsens').addEventListener('change', () => { settings.scrollSensitivity = Math.min(10, Math.max(1, Number(q('#st-scrollsens').value) || 1)); applyAllSettings() })
   q('#st-altwheel').addEventListener('change', () => { settings.altWheel = q('#st-altwheel').value; applyAllSettings() })
@@ -1869,10 +1986,13 @@ function buildSettingsPane(paneEl) {
     if (!preview || preview.canceled) return
     if (preview.error) return toast('Импорт: ' + preview.error, true)
     const d = makeDialog('<h2>Импорт конфигурации</h2><p class="confirm-text"></p><div class="modal-actions"><button class="btn ghost" data-mode="cancel">Отмена</button><button class="btn" data-mode="replace">Заменить</button><button class="btn primary" data-mode="merge">Объединить</button></div>')
-    d.querySelector('.confirm-text').textContent = preview.connections + ' connection(s), ' + preview.settings + ' setting(s). Passwords and passphrases are never imported.'
-    d.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
+    d.m.querySelector('.confirm-text').textContent = uiText(
+      preview.connections + ' connection(s), ' + preview.settings + ' setting(s). Passwords and passphrases are never imported.',
+      'Подключений: ' + preview.connections + ', настроек: ' + preview.settings + '. Пароли и ключевые фразы никогда не импортируются.'
+    )
+    d.m.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
       const mode = button.dataset.mode
-      d.remove()
+      d.close()
       if (mode === 'cancel') return
       const r = await window.api.applyConfigImport(preview.token, mode)
       if (r.error) return toast('Импорт: ' + r.error, true)
@@ -1887,7 +2007,7 @@ function buildSettingsPane(paneEl) {
     if (r.error) return toast('Ошибка: ' + r.error, true)
     window.api.restartApp()
   }))
-  q('#st-reset-all').addEventListener('click', () => askConfirm('Удалить настройки, серверы и известные SSH-ключи хостов? Перед сбросом будет создана локальная резервная копия.', async () => {
+  q('#st-reset-all').addEventListener('click', () => askConfirm('Безвозвратно удалить настройки, серверы, известные SSH-ключи хостов, резервные копии, логи и дампы? Резервная копия не создаётся.', async () => {
     const r = await window.api.resetConfig('all')
     if (r.error) return toast('Ошибка: ' + r.error, true)
     window.api.restartApp()
@@ -2307,11 +2427,16 @@ function injectV9Settings(pane) {
   const mkNav = (cat, label) => {
     const el = document.createElement('div')
     el.className = 'set-nav-item'
+    el.setAttribute('role', 'button')
+    el.tabIndex = 0
     el.dataset.cat = cat
     el.innerHTML = label
     el.addEventListener('click', () => {
       pane.querySelectorAll('.set-nav-item').forEach((x) => x.classList.toggle('active', x === el))
       pane.querySelectorAll('.set-section').forEach((s) => s.classList.toggle('hidden', s.dataset.cat !== cat))
+    })
+    el.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el.click() }
     })
     nav.insertBefore(el, note)
   }
@@ -2606,10 +2731,10 @@ function injectV10Settings(pane) {
   var app = pane.querySelector('.set-section[data-cat="appearance"]')
   if (!app) return
   var uiOpts = '<option value="">Segoe UI (системный)</option>'
-  customFonts.forEach(function (n) { uiOpts += '<option>' + n + '</option>' })
+  customFonts.forEach(function (n) { uiOpts += '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>' })
   var termOpts = '<option value="">— не менять —</option>'
   customFonts.concat(['JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas']).forEach(function (n) {
-    termOpts += '<option>' + n + '</option>'
+    termOpts += '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>'
   })
   app.insertAdjacentHTML('beforeend',
     '<div class="set-card"><b><i class=ic-type></i> Шрифты</b>' +

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.3.0-beta.4
+
+- added an optional, reduced-motion-aware animation for terminal text input and
+  output, with throttling for high-volume streams;
+- fixed configuration import dialogs crashing because they addressed the dialog
+  wrapper instead of its DOM element;
+- added damaged-config quarantine and recovery from the latest valid backup,
+  bounded config normalization, and collision-resistant backup names;
+- hardened SFTP path normalization, root deletion protection, rename/mkdir
+  boundaries, server-provided filenames, recursive download cleanup, and upload
+  grants;
+- cleaned temporary clipboard screenshots when sessions end and made selected
+  local-file capabilities single-use; stale screenshot directories are pruned;
+- made full-data reset actually remove backups and local diagnostics without
+  silently preserving an encrypted-secrets backup, and aligned the privacy docs;
+- escaped custom-font option markup and improved keyboard/dialog accessibility;
+- updated Electron to 41.10.5 and js-yaml to 4.3.1, resolving all currently
+  reported npm audit findings;
+- moved diagnostic logs from the shared temporary directory into private app
+  data and pinned GitHub Actions to reviewed commit hashes;
+- expanded unit and static regression checks and corrected documented artifact
+  names.
+
 ## 2.3.0-beta.3
 
 - fixed mouse-wheel scrolling in Claude Code, Codex, and other full-screen TUIs:

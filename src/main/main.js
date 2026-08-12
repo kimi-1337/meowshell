@@ -5,11 +5,14 @@ const os = require('os')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
 const {
+  isDangerousRemoteTarget,
   normalizeConfig,
+  normalizeRemotePath,
   quotePathForShell,
   quotePosix,
   resolveLocalChild,
   safeEntryName,
+  safeRemoteEntryName,
   validPort,
 } = require('./utils')
 
@@ -20,22 +23,27 @@ protocol.registerSchemesAsPrivileged([{
 
 // ---------- защита от «молчаливых» падений ----------
 // Если в главном процессе что-то падает, показываем окно с ошибкой
-// и пишем лог в %TEMP%\meowshell-error.log, чтобы можно было разобраться.
-const errorLogPath = path.join(os.tmpdir(), 'meowshell-error.log')
+// и пишем лог в приватный каталог данных приложения, чтобы можно было разобраться.
+const errorLogPath = path.join(app.getPath('userData'), 'logs', 'meowshell-error.log')
+const legacyErrorLogPath = path.join(os.tmpdir(), 'meowshell-error.log')
 try {
+  fs.mkdirSync(path.dirname(errorLogPath), { recursive: true })
   if (fs.statSync(errorLogPath).size > 5 * 1024 * 1024) {
     const previous = errorLogPath + '.1'
     try { fs.unlinkSync(previous) } catch {}
     fs.renameSync(errorLogPath, previous)
   }
+  try { fs.chmodSync(errorLogPath, 0o600) } catch {}
 } catch {}
 
 function reportFatal(err) {
   const text = (err && err.stack) || String(err)
   try {
+    fs.mkdirSync(path.dirname(errorLogPath), { recursive: true })
     fs.appendFileSync(
       errorLogPath,
-      new Date().toISOString() + '\n' + text + '\n\n'
+      new Date().toISOString() + '\n' + text + '\n\n',
+      { encoding: 'utf8', mode: 0o600 }
     )
   } catch {}
   try { dialog.showErrorBox(mt('MeowShell — Error', 'MeowShell — ошибка'), text) } catch {}
@@ -46,9 +54,11 @@ process.on('unhandledRejection', reportFatal)
 // v2.0.2: диагностика «молчаливого» закрытия
 function logLine(msg) {
   try {
+    fs.mkdirSync(path.dirname(errorLogPath), { recursive: true })
     fs.appendFileSync(
       errorLogPath,
-      new Date().toISOString() + ' ' + msg + '\n'
+      new Date().toISOString() + ' ' + msg + '\n',
+      { encoding: 'utf8', mode: 0o600 }
     )
   } catch {}
 }
@@ -96,6 +106,7 @@ try {
 } catch {}
 
 let isQuitting = false
+let suppressShutdownLog = false
 app.on('before-quit', () => { isQuitting = true })
 app.on('render-process-gone', (event, webContents, details) => {
   const reason = details ? details.reason + ' (код ' + details.exitCode + ')' : '?'
@@ -113,7 +124,7 @@ app.on('render-process-gone', (event, webContents, details) => {
     }
     return
   }
-  reportFatal(new Error('Окно аварийно завершилось даже в безопасном режиме: ' + reason + '\nЛог: %TEMP%\\meowshell-error.log\nДампы: ' + app.getPath('crashDumps')))
+  reportFatal(new Error('Окно аварийно завершилось даже в безопасном режиме: ' + reason + '\nЛог: ' + errorLogPath + '\nДампы: ' + app.getPath('crashDumps')))
 })
 app.on('child-process-gone', (event, details) => {
   if (!details) return
@@ -122,7 +133,7 @@ app.on('child-process-gone', (event, details) => {
     enableSafeGpuMode('GPU: ' + details.reason)
   }
 })
-app.on('will-quit', () => logLine('[quit] приложение завершилось'))
+app.on('will-quit', () => { if (!suppressShutdownLog) logLine('[quit] приложение завершилось') })
 
 // node-pty — локальные терминалы. Обёрнуто в try, чтобы приложение
 // запускалось даже если модуль не собрался (SSH будет работать всё равно).
@@ -153,7 +164,48 @@ function configPath() {
   return path.join(app.getPath('userData'), 'meowshell-config.json')
 }
 
-function migrateLegacySecrets(cfg) {
+let configRecovery = null
+
+function readConfigDocument(file) {
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) {
+    throw new Error('Конфигурация не является обычным JSON-файлом допустимого размера')
+  }
+  return normalizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')))
+}
+
+function latestConfigBackup() {
+  const directory = path.join(path.dirname(configPath()), 'backups')
+  let candidates = []
+  try {
+    candidates = fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^meowshell-.*\.json$/i.test(entry.name))
+      .map((entry) => {
+        const file = path.join(directory, entry.name)
+        return { file, mtime: fs.lstatSync(file).mtimeMs }
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+  } catch {}
+  for (const candidate of candidates.slice(0, 100)) {
+    try { return { config: readConfigDocument(candidate.file), file: candidate.file } } catch {}
+  }
+  return null
+}
+
+function quarantineBrokenConfig(file, error) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')
+  const target = path.join(path.dirname(file), 'meowshell-config.corrupt-' + stamp + '-' + crypto.randomBytes(3).toString('hex') + '.json')
+  try {
+    fs.renameSync(file, target)
+    logLine('[config] повреждённый файл перемещён: ' + target + ' | ' + error.message)
+    return target
+  } catch (renameError) {
+    logLine('[config] не удалось изолировать повреждённый файл: ' + renameError.message)
+    return null
+  }
+}
+
+function migrateLegacySecrets(cfg, allowSave = true) {
   let changed = false
   for (const connection of cfg.connections) {
     for (const field of ['password', 'passphrase']) {
@@ -166,14 +218,29 @@ function migrateLegacySecrets(cfg) {
       }
     }
   }
-  if (changed) saveConfig(cfg)
+  if (changed && allowSave) saveConfig(cfg)
   return cfg
 }
 
 function loadConfig() {
-  try {
-    return migrateLegacySecrets(normalizeConfig(JSON.parse(fs.readFileSync(configPath(), 'utf8'))))
-  } catch {}
+  const current = configPath()
+  if (fs.existsSync(current)) {
+    try {
+      return migrateLegacySecrets(readConfigDocument(current))
+    } catch (err) {
+      const quarantined = quarantineBrokenConfig(current, err)
+      const recovered = latestConfigBackup()
+      if (recovered) {
+        const restored = !!quarantined && saveConfig(recovered.config)
+        configRecovery = { type: 'backup', source: recovered.file, quarantined, restored }
+        return migrateLegacySecrets(recovered.config, restored)
+      }
+      const empty = normalizeConfig(null)
+      const restored = !!quarantined && saveConfig(empty)
+      configRecovery = { type: 'empty', quarantined, restored }
+      return empty
+    }
+  }
   // миграция со старого MyTerm: подхватываем прежний конфиг,
   // чтобы не потерять сохранённые серверы и настройки
   try {
@@ -223,7 +290,8 @@ function backupConfig(label = 'backup') {
   const source = configPath()
   if (!fs.existsSync(source)) return null
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')
-  const target = path.join(path.dirname(source), 'backups', 'meowshell-' + label + '-' + stamp + '.json')
+  const suffix = crypto.randomBytes(3).toString('hex')
+  const target = path.join(path.dirname(source), 'backups', 'meowshell-' + label + '-' + stamp + '-' + suffix + '.json')
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL)
   try { fs.chmodSync(target, 0o600) } catch {}
@@ -319,6 +387,15 @@ function cfgView(cfg) {
     securityWarning: (cfg.connections || []).some((c) =>
       [c.password, c.passphrase].some((value) => typeof value === 'string' && value && !value.startsWith('enc:'))
     ) ? 'В старой конфигурации остались незашифрованные секреты: системное шифрование сейчас недоступно.' : '',
+    configNotice: configRecovery
+      ? (configRecovery.type === 'backup'
+          ? (configRecovery.restored
+              ? mt('The damaged configuration was isolated and the latest valid backup was restored.', 'Повреждённая конфигурация изолирована, восстановлена последняя исправная резервная копия.')
+              : mt('The current configuration could not be replaced. A valid backup was loaded for this session; check file permissions before saving changes.', 'Текущую конфигурацию не удалось заменить. Исправная копия загружена только на этот сеанс; проверь права на файл до сохранения изменений.'))
+          : (configRecovery.restored
+              ? mt('The damaged configuration was isolated, but no valid backup was found. MeowShell started with empty settings.', 'Повреждённая конфигурация изолирована, но исправной резервной копии нет. MeowShell запущен с пустыми настройками.')
+              : mt('The configuration could not be read or isolated. MeowShell is using temporary empty settings; check file permissions.', 'Конфигурацию не удалось прочитать или изолировать. MeowShell использует временные пустые настройки; проверь права на файл.')))
+      : '',
     connections: (cfg.connections || []).map((c) =>
       Object.assign({}, c, {
         password: undefined,
@@ -358,6 +435,54 @@ const rendererUrl = 'app://meowshell/src/renderer/index.html'
 const localResources = new Map()
 const selectedLocalFiles = new Set()
 const uploadGrants = new Map()
+const temporaryMediaBySession = new Map()
+
+function removeTemporaryMediaDirectory(directory) {
+  try {
+    const tempRoot = path.resolve(os.tmpdir())
+    const target = path.resolve(String(directory || ''))
+    const relative = path.relative(tempRoot, target)
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) return false
+    if (!path.basename(target).startsWith('meowshell-media-')) return false
+    const stat = fs.lstatSync(target)
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) return false
+    if (stat.isSymbolicLink()) fs.unlinkSync(target)
+    else if (stat.isDirectory()) fs.rmSync(target, { recursive: true, force: true })
+    else return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+function rememberTemporaryMedia(id, directory) {
+  if (!temporaryMediaBySession.has(id)) temporaryMediaBySession.set(id, new Set())
+  temporaryMediaBySession.get(id).add(directory)
+}
+
+function cleanupTemporaryMedia(id) {
+  const directories = temporaryMediaBySession.get(id)
+  temporaryMediaBySession.delete(id)
+  for (const directory of directories || []) removeTemporaryMediaDirectory(directory)
+}
+
+function pruneExpired(map) {
+  const now = Date.now()
+  for (const [key, value] of map) if (!value || value.expiresAt < now) map.delete(key)
+}
+
+function cleanupStaleTemporaryMedia(maxAge = 24 * 60 * 60 * 1000) {
+  let entries = []
+  try { entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true }) } catch { return }
+  for (const entry of entries) {
+    if (!entry.name.startsWith('meowshell-media-')) continue
+    const target = path.join(os.tmpdir(), entry.name)
+    try {
+      const stat = fs.lstatSync(target)
+      if (maxAge === 0 || Date.now() - stat.mtimeMs >= maxAge) removeTemporaryMediaDirectory(target)
+    } catch {}
+  }
+}
 
 function registerLocalResource(filePath) {
   const absolute = path.resolve(String(filePath || ''))
@@ -450,6 +575,7 @@ onIpc('win:close', () => { if (win) win.close() })
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return
+  cleanupStaleTemporaryMedia()
   protocol.handle('app', (request) => {
     try {
       const url = new URL(request.url)
@@ -468,8 +594,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  for (const s of sessions.values()) {
+  for (const [id, s] of sessions) {
     try { s.kill() } catch {}
+    cleanupTemporaryMedia(id)
   }
   app.quit()
 })
@@ -514,6 +641,7 @@ handleIpc('session:create-local', (e, opts = {}) => {
   p.onData((data) => send('session:data', { id, data }))
   p.onExit(({ exitCode }) => {
     sessions.delete(id)
+    cleanupTemporaryMedia(id)
     send('session:exit', { id, code: exitCode })
   })
   sessions.set(id, {
@@ -665,6 +793,7 @@ onIpc('session:kill', (e, { id }) => {
     try { closeTunnelsFor(id) } catch {}
     try { stopMonitor(id) } catch {}
   }
+  cleanupTemporaryMedia(id)
 })
 
 // ---------- SFTP ----------
@@ -681,9 +810,7 @@ function getSftp(id) {
 }
 
 function remotePath(value) {
-  const result = String(value || '')
-  if (!result || result.length > 4096 || result.includes('\0')) throw new Error('Некорректный удалённый путь')
-  return result
+  return normalizeRemotePath(value)
 }
 
 handleIpc('sftp:list', async (e, { id, path: dir }) => {
@@ -691,19 +818,24 @@ handleIpc('sftp:list', async (e, { id, path: dir }) => {
     const sftp = await getSftp(id)
     // превращаем путь в абсолютный (чтобы кнопка «вверх» доходила до корня /)
     const abs = await new Promise((res, rej) =>
-      sftp.realpath(dir || '.', (err, p) => (err ? rej(err) : res(p)))
+      sftp.realpath(remotePath(dir || '.'), (err, p) => (err ? rej(err) : res(remotePath(p))))
     )
     const list = await new Promise((res, rej) =>
       sftp.readdir(abs, (err, l) => (err ? rej(err) : res(l)))
     )
-    const entries = list.map((x) => ({
-      name: x.filename,
-      isDir: x.attrs.isDirectory(),
-      size: x.attrs.size,
-      mtime: x.attrs.mtime,
-    }))
+    const entries = []
+    for (const x of list.slice(0, 10000)) {
+      try {
+        entries.push({
+          name: safeRemoteEntryName(x.filename),
+          isDir: x.attrs.isDirectory(),
+          size: x.attrs.size,
+          mtime: x.attrs.mtime,
+        })
+      } catch {}
+    }
     entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-    return { entries, path: abs }
+    return { entries, path: abs, truncated: list.length > 10000 }
   } catch (err) {
     return { error: err.message }
   }
@@ -714,7 +846,8 @@ handleIpc('sftp:download', async (e, { id, remotePath, name }) => {
     const sftp = await getSftp(id)
     const res = await dialog.showSaveDialog(win, { defaultPath: safeEntryName(name) })
     if (res.canceled || !res.filePath) return { canceled: true }
-    await new Promise((r, j) => sftp.fastGet(remotePath, res.filePath, (err) => (err ? j(err) : r())))
+    const source = normalizeRemotePath(remotePath)
+    await new Promise((r, j) => sftp.fastGet(source, res.filePath, (err) => (err ? j(err) : r())))
     return { ok: true, localPath: res.filePath }
   } catch (err) {
     return { error: err.message }
@@ -722,7 +855,7 @@ handleIpc('sftp:download', async (e, { id, remotePath, name }) => {
 })
 
 // v2.1: рекурсивное скачивание папки целиком
-async function sftpWalkDownload(sftp, remoteDir, localDir, state = { files: 0 }, depth = 0) {
+async function sftpWalkDownload(sftp, remoteDir, localDir, state = { files: 0, entries: 0 }, depth = 0) {
   if (depth > 64) throw new Error('Слишком большая глубина удалённого каталога')
   if (fs.existsSync(localDir) && fs.lstatSync(localDir).isSymbolicLink()) {
     throw new Error('Скачивание через локальную символическую ссылку запрещено')
@@ -731,8 +864,10 @@ async function sftpWalkDownload(sftp, remoteDir, localDir, state = { files: 0 },
   const list = await new Promise((r, j) => sftp.readdir(remoteDir, (err, l) => (err ? j(err) : r(l))))
   let count = 0
   for (const it of list) {
+    state.entries++
+    if (state.entries > 100000) throw new Error('В каталоге слишком много элементов для одной операции')
     const name = safeEntryName(it.filename)
-    const rp = remoteDir.replace(/\/+$/, '') + '/' + name
+    const rp = path.posix.join(remoteDir, safeRemoteEntryName(it.filename))
     const lp = resolveLocalChild(localDir, name)
     if (fs.existsSync(lp) && fs.lstatSync(lp).isSymbolicLink()) {
       throw new Error('Локальная символическая ссылка конфликтует с файлом: ' + name)
@@ -763,9 +898,19 @@ handleIpc('sftp:download-dir', async (e, { id, remotePath, name }) => {
       properties: ['openDirectory', 'createDirectory'],
     })
     if (res.canceled || !res.filePaths || !res.filePaths[0]) return { canceled: true }
-    const target = resolveLocalChild(res.filePaths[0], name)
-    const count = await sftpWalkDownload(sftp, remotePath, target)
-    return { ok: true, localPath: target, count }
+    const parent = path.resolve(res.filePaths[0])
+    const target = resolveLocalChild(parent, name)
+    if (fs.existsSync(target)) throw new Error('Папка назначения уже существует; выбери другой каталог или переименуй её')
+    try {
+      const count = await sftpWalkDownload(sftp, normalizeRemotePath(remotePath), target)
+      return { ok: true, localPath: target, count }
+    } catch (err) {
+      const relative = path.relative(parent, target)
+      if (relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) {
+        try { fs.rmSync(target, { recursive: true, force: true }) } catch {}
+      }
+      throw err
+    }
   } catch (err) {
     return { error: err.message }
   }
@@ -777,7 +922,7 @@ handleIpc('sftp:upload', async (e, { id, remoteDir }) => {
     const res = await dialog.showOpenDialog(win, { properties: ['openFile'] })
     if (res.canceled || !res.filePaths.length) return { canceled: true }
     const local = res.filePaths[0]
-    const remote = String(remoteDir || '.').replace(/\/+$/, '') + '/' + path.basename(local)
+    const remote = path.posix.join(normalizeRemotePath(remoteDir || '.'), safeRemoteEntryName(path.basename(local)))
     await new Promise((r, j) => sftp.fastPut(local, remote, (err) => (err ? j(err) : r())))
     return { ok: true, remote }
   } catch (err) {
@@ -785,9 +930,10 @@ handleIpc('sftp:upload', async (e, { id, remoteDir }) => {
   }
 })
 
-handleIpc('sftp:mkdir', async (e, { id, path: dirPath }) => {
+handleIpc('sftp:mkdir', async (e, { id, parent, name }) => {
   try {
     const sftp = await getSftp(id)
+    const dirPath = path.posix.join(normalizeRemotePath(parent || '.'), safeRemoteEntryName(name))
     await new Promise((r, j) => sftp.mkdir(dirPath, (err) => (err ? j(err) : r())))
     return { ok: true }
   } catch (err) {
@@ -797,6 +943,7 @@ handleIpc('sftp:mkdir', async (e, { id, path: dirPath }) => {
 
 // Загрузка конкретных локальных файлов (drag&drop) с прогрессом
 handleIpc('files:grant-upload', (e, paths) => {
+  pruneExpired(uploadGrants)
   const grants = []
   for (const value of Array.isArray(paths) ? paths.slice(0, 100) : []) {
     try {
@@ -812,6 +959,7 @@ handleIpc('files:grant-upload', (e, paths) => {
 
 handleIpc('sftp:upload-grants', async (e, { id, remoteDir, grants }) => {
   try {
+    pruneExpired(uploadGrants)
     const sftp = await getSftp(id)
     const remotes = []
     const paths = []
@@ -824,8 +972,8 @@ handleIpc('sftp:upload-grants', async (e, { id, remoteDir, grants }) => {
     for (const local of paths) {
       const stat = fs.statSync(local)
       if (!stat.isFile()) throw new Error('Загрузка папок перетаскиванием пока не поддерживается')
-      const name = path.basename(local)
-      const remote = String(remoteDir || '.').replace(/\/+$/, '') + '/' + name
+      const name = safeRemoteEntryName(path.basename(local))
+      const remote = path.posix.join(normalizeRemotePath(remoteDir || '.'), name)
       await new Promise((r, j) =>
         sftp.fastPut(
           local,
@@ -850,9 +998,9 @@ handleIpc('sftp:upload-grants', async (e, { id, remoteDir, grants }) => {
 handleIpc('session:paste-media', async (e, { id }) => {
   const s = sessions.get(id)
   if (!s) return { handled: false }
+  let temporaryDirectory = null
   try {
     let localPath = null
-    let temporaryFile = false
 
     // 1) файл, скопированный в Проводнике (Ctrl+C по файлу)
     try {
@@ -868,9 +1016,9 @@ handleIpc('session:paste-media', async (e, { id }) => {
       const img = clipboard.readImage()
       if (!img.isEmpty()) {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meowshell-media-'))
+        temporaryDirectory = dir
         localPath = path.join(dir, 'screenshot.png')
         fs.writeFileSync(localPath, img.toPNG())
-        temporaryFile = true
       }
     }
 
@@ -878,6 +1026,10 @@ handleIpc('session:paste-media', async (e, { id }) => {
 
     if (s.type === 'local') {
       s.write(quotePathForShell(localPath, s.shell))
+      if (temporaryDirectory) {
+        rememberTemporaryMedia(id, temporaryDirectory)
+        temporaryDirectory = null
+      }
       return { handled: true, path: localPath }
     }
 
@@ -892,14 +1044,13 @@ handleIpc('session:paste-media', async (e, { id }) => {
     try {
       await new Promise((r, j) => sftp.fastPut(localPath, remote, (err) => (err ? j(err) : r())))
     } finally {
-      if (temporaryFile) {
-        try { fs.unlinkSync(localPath) } catch {}
-        try { fs.rmdirSync(path.dirname(localPath)) } catch {}
-      }
+      if (temporaryDirectory) removeTemporaryMediaDirectory(temporaryDirectory)
+      temporaryDirectory = null
     }
     s.write(quotePosix(remote))
     return { handled: true, path: remote }
   } catch (err) {
+    if (temporaryDirectory) removeTemporaryMediaDirectory(temporaryDirectory)
     return { handled: false, error: err.message }
   }
 })
@@ -927,6 +1078,7 @@ handleIpc('config:export', async () => {
 
 handleIpc('config:import-preview', async () => {
   try {
+    pruneExpired(pendingConfigImports)
     const result = await dialog.showOpenDialog(win, {
       title: mt('Import MeowShell configuration', 'Импорт конфигурации MeowShell'),
       filters: [{ name: 'JSON', extensions: ['json'] }],
@@ -951,6 +1103,8 @@ handleIpc('config:import-preview', async () => {
 
 handleIpc('config:import-apply', (e, payload) => {
   try {
+    pruneExpired(pendingConfigImports)
+    if (!payload || (payload.mode !== 'replace' && payload.mode !== 'merge')) throw new Error('Unknown import mode')
     const token = payload && String(payload.token || '')
     const pending = pendingConfigImports.get(token)
     pendingConfigImports.delete(token)
@@ -978,10 +1132,58 @@ handleIpc('config:import-apply', (e, payload) => {
   }
 })
 
+function clearManagedDirectory(directory) {
+  const target = path.resolve(String(directory || ''))
+  if (!target || target === path.parse(target).root || !fs.existsSync(target)) return
+  const stat = fs.lstatSync(target)
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Небезопасный каталог очистки: ' + target)
+  for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+    const child = path.resolve(target, entry.name)
+    const relative = path.relative(target, child)
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+      throw new Error('Небезопасная цель очистки: ' + child)
+    }
+    fs.rmSync(child, { recursive: true, force: true })
+  }
+}
+
+function removeManagedFile(file) {
+  const target = path.resolve(String(file || ''))
+  if (!target || target === path.parse(target).root || !fs.existsSync(target)) return
+  const stat = fs.lstatSync(target)
+  if (stat.isDirectory() && !stat.isSymbolicLink()) throw new Error('Ожидался файл: ' + target)
+  fs.unlinkSync(target)
+}
+
+function clearAllLocalData() {
+  const userData = path.resolve(app.getPath('userData'))
+  clearManagedDirectory(path.join(userData, 'backups'))
+  clearManagedDirectory(path.dirname(errorLogPath))
+  clearManagedDirectory(app.getPath('crashDumps'))
+  removeManagedFile(legacyErrorLogPath)
+  removeManagedFile(legacyErrorLogPath + '.1')
+  const marker = gpuMarkerPath()
+  if (marker) removeManagedFile(marker)
+  for (const entry of fs.readdirSync(userData, { withFileTypes: true })) {
+    if (entry.isFile() && /^meowshell-config\.(?:corrupt-|json\.tmp-)/.test(entry.name)) {
+      removeManagedFile(path.join(userData, entry.name))
+    }
+  }
+  for (const id of temporaryMediaBySession.keys()) cleanupTemporaryMedia(id)
+  cleanupStaleTemporaryMedia(0)
+  selectedLocalFiles.clear()
+  localResources.clear()
+  uploadGrants.clear()
+  pendingConfigImports.clear()
+  configRecovery = null
+  suppressShutdownLog = true
+}
+
 handleIpc('config:reset', (e, mode) => {
   try {
+    if (mode !== 'settings' && mode !== 'all') throw new Error('Unknown reset mode')
     const cfg = loadConfig()
-    const backupPath = backupConfig('before-reset')
+    const backupPath = mode === 'all' ? null : backupConfig('before-reset')
     if (mode === 'all') {
       cfg.connections = []
       cfg.settings = {}
@@ -990,6 +1192,7 @@ handleIpc('config:reset', (e, mode) => {
       cfg.settings = {}
     }
     if (!saveConfig(cfg)) throw new Error('Could not reset configuration')
+    if (mode === 'all') clearAllLocalData()
     return { ok: true, backupPath, view: cfgView(cfg) }
   } catch (err) {
     return { error: err.message }
@@ -1115,7 +1318,7 @@ handleIpc('config:import-tabby', async () => {
     const stat = fs.statSync(res.filePaths[0])
     if (stat.size > 5 * 1024 * 1024) return { error: 'Файл конфигурации слишком большой' }
     const doc = yaml.load(fs.readFileSync(res.filePaths[0], 'utf8'))
-    const profiles = Array.isArray(doc && doc.profiles) ? doc.profiles : []
+    const profiles = Array.isArray(doc && doc.profiles) ? doc.profiles.slice(0, 10000) : []
     const cfg = loadConfig()
     cfg.connections = cfg.connections || []
     let added = 0
@@ -1170,9 +1373,10 @@ handleIpc('dialog:pick-file', async () => {
 handleIpc('app:local-resource', (e, payload) => {
   try {
     const filePath = path.resolve(String(payload && payload.path || ''))
+    const wasSelected = selectedLocalFiles.delete(filePath)
     const type = payload && payload.type
     const allowed = type === 'image' ? /\.(?:png|jpe?g|gif|webp|bmp)$/i : /$a/
-    if (!selectedLocalFiles.has(filePath) || !allowed.test(filePath) || !fs.statSync(filePath).isFile()) return null
+    if (!wasSelected || !allowed.test(filePath) || !fs.statSync(filePath).isFile()) return null
     return registerLocalResource(filePath)
   } catch {
     return null
@@ -1189,9 +1393,8 @@ async function sftpRmrf(sftp, target, state = { entries: 0 }, depth = 0) {
   if (st.isDirectory()) {
     const list = await new Promise((res, rej) => sftp.readdir(target, (err, l) => (err ? rej(err) : res(l))))
     for (const item of list) {
-      const name = String(item && item.filename || '')
-      if (!name || name === '.' || name === '..' || /[\/\0]/.test(name)) throw new Error('Сервер вернул небезопасное имя файла')
-      await sftpRmrf(sftp, target.replace(/\/+$/, '') + '/' + name, state, depth + 1)
+      const name = safeRemoteEntryName(item && item.filename)
+      await sftpRmrf(sftp, path.posix.join(target, name), state, depth + 1)
     }
     await new Promise((res, rej) => sftp.rmdir(target, (err) => (err ? rej(err) : res())))
   } else {
@@ -1201,6 +1404,10 @@ async function sftpRmrf(sftp, target, state = { entries: 0 }, depth = 0) {
 
 handleIpc('sftp:rename', async (e, { id, from, to }) => {
   try {
+    from = normalizeRemotePath(from)
+    to = normalizeRemotePath(to)
+    safeRemoteEntryName(path.posix.basename(to))
+    if (path.posix.dirname(from) !== path.posix.dirname(to)) throw new Error('Переименование не может перемещать файл в другой каталог')
     const sftp = await getSftp(id)
     await new Promise((res, rej) => sftp.rename(from, to, (err) => (err ? rej(err) : res())))
     return { ok: true }
@@ -1212,6 +1419,7 @@ handleIpc('sftp:rename', async (e, { id, from, to }) => {
 handleIpc('sftp:chmod', async (e, { id, path: p, mode }) => {
   try {
     if (!/^[0-7]{3,4}$/.test(String(mode))) return { error: 'Неверный режим chmod' }
+    p = normalizeRemotePath(p)
     const sftp = await getSftp(id)
     await new Promise((res, rej) => sftp.chmod(p, parseInt(String(mode), 8), (err) => (err ? rej(err) : res())))
     return { ok: true }
@@ -1222,8 +1430,8 @@ handleIpc('sftp:chmod', async (e, { id, path: p, mode }) => {
 
 handleIpc('sftp:delete', async (e, { id, path: p }) => {
   try {
-    p = remotePath(p)
-    if (p === '/' || p === '.' || p === '..') return { error: 'Корневой каталог удалять нельзя' }
+    p = normalizeRemotePath(p)
+    if (isDangerousRemoteTarget(p)) return { error: 'Корневой каталог удалять нельзя' }
     const sftp = await getSftp(id)
     await sftpRmrf(sftp, p)
     return { ok: true }
@@ -1234,6 +1442,7 @@ handleIpc('sftp:delete', async (e, { id, path: p }) => {
 
 handleIpc('sftp:read-file', async (e, { id, path: p }) => {
   try {
+    p = normalizeRemotePath(p)
     const sftp = await getSftp(id)
     const st = await new Promise((res, rej) => sftp.stat(p, (err, s) => (err ? rej(err) : res(s))))
     if (st.size > 2 * 1024 * 1024) return { error: 'Файл слишком большой для редактора (макс. 2 МБ)' }
@@ -1246,6 +1455,7 @@ handleIpc('sftp:read-file', async (e, { id, path: p }) => {
 
 handleIpc('sftp:write-file', async (e, { id, path: p, content }) => {
   try {
+    p = normalizeRemotePath(p)
     content = String(content == null ? '' : content)
     if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) return { error: 'Файл слишком большой для редактора (макс. 2 МБ)' }
     const sftp = await getSftp(id)
@@ -1437,6 +1647,8 @@ handleIpc('ssh:keygen', async (e, { type, comment, passphrase }) => {
   const kt = type === 'rsa' ? 'rsa' : 'ed25519'
   const opts = { comment: String(comment || 'meowshell').replace(/[\r\n]/g, ' ').slice(0, 200) }
   if (kt === 'rsa') opts.bits = 4096
+  passphrase = String(passphrase || '')
+  if (passphrase.length > 4096) return { error: 'пароль ключа слишком длинный' }
   if (passphrase) { opts.passphrase = passphrase; opts.cipher = 'aes256-cbc' }
   let pair
   try { pair = utils.generateKeyPairSync(kt, opts) } catch (err) { return { error: err.message } }

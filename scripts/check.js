@@ -44,6 +44,16 @@ else {
   }
   if (!onboarding[0].includes('d.close()')) fail('Диалог onboarding должен закрываться через d.close()')
 }
+if (renderer.includes("d.querySelector('.confirm-text')") || renderer.includes("d.querySelectorAll('[data-mode]')")) {
+  fail('Диалог импорта должен обращаться к DOM-элементу d.m')
+}
+if (!renderer.includes("d.m.querySelector('.confirm-text')") || !renderer.includes("d.m.querySelectorAll('[data-mode]')") ||
+    !renderer.includes('animateTerminalText(term, \'input\'') || !renderer.includes('animateTerminalText(term, \'output\'')) {
+  fail('Импорт конфигурации и плавная анимация ввода/вывода не прошли регрессионную проверку')
+}
+if (!main.includes('isDangerousRemoteTarget(p)') || !main.includes('safeRemoteEntryName(item && item.filename)')) {
+  fail('Опасные SFTP-цели и имена должны проверяться в main process')
+}
 const wheelHandler = renderer.match(/let altWheelAcc = 0[\s\S]*?term\.onBell/)
 if (!wheelHandler) fail('Не найден обработчик колёсика полноэкранных программ')
 else {
@@ -68,8 +78,19 @@ for (const channel of sentChannels) if (!mainChannels.has(channel)) fail('Нет
 
 const pkg = JSON.parse(read('package.json'))
 if (!renderer.includes('MeowShell v' + pkg.version)) fail('Версия UI не совпадает с package.json')
+for (const file of ['README.md', 'README.ru.md', 'CHANGELOG.md']) {
+  if (!read(file).includes(pkg.version)) fail(file + ': версия не совпадает с package.json')
+}
 if (pkg.license !== 'GPL-3.0-only') fail('package.json должен использовать GPL-3.0-only')
 if (!fs.existsSync(path.join(root, 'LICENSE'))) fail('Отсутствует файл LICENSE')
+
+for (const file of fs.readdirSync(path.join(root, '.github', 'workflows')).filter((name) => /\.ya?ml$/i.test(name))) {
+  const source = read(path.join('.github', 'workflows', file))
+  for (const match of source.matchAll(/uses:\s*([\w.-]+\/[\w.-]+)@([^\s#]+)/g)) {
+    if (!/^[a-f0-9]{40}$/.test(match[2])) fail(file + ': GitHub Action не закреплён полным commit SHA: ' + match[1])
+  }
+  if (/npm audit[^\n]*--omit=dev/.test(source)) fail(file + ': аудит не должен скрывать Electron из devDependencies')
+}
 
 const ignored = new Set(['.git', 'node_modules', 'dist', 'coverage'])
 function scanSecrets(dir) {

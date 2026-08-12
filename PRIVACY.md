@@ -13,9 +13,11 @@ saved passwords or other authentication secrets.
 
 ## Network access
 
-MeowShell opens network connections only after an explicit user action, such as
-starting an SSH/SFTP connection or opening a link. There is no background
-telemetry, account service, cloud synchronization, or automatic updater.
+MeowShell opens network connections after an explicit user action, such as
+starting an SSH/SFTP connection or opening a link. If the user enables tab
+restoration or automatic tunnels, those saved SSH connections may also be opened
+when MeowShell starts. There is no background telemetry, account service, cloud
+synchronization, or automatic updater.
 
 ## Crash diagnostics
 
@@ -25,5 +27,9 @@ reporting a bug.
 
 ## Removing local data
 
-Use **Settings → Diagnostics & data → Reset all data**, or remove MeowShell's
-application data directory after closing the application.
+Use **Settings → Diagnostics & data → Reset all data** to permanently remove the
+saved configuration, known hosts, local backups, logs, and existing crash dumps.
+This full reset deliberately does not create another backup; a new empty config
+and new startup diagnostics may be created when the application restarts. To
+remove Chromium caches as well, close MeowShell and delete its application data
+directory.

@@ -14,7 +14,7 @@
       <div id="tb-name">MeowShell</div>
       <div id="tabbar">
         <button id="btn-sidebar" class="btn small" title="Скрыть/показать панель"><i class=ic-menu></i></button>
-        <div id="tabs"></div>
+        <div id="tabs" role="tablist" aria-label="Открытые терминалы"></div>
         <button id="btn-split" class="btn small hidden" title="Сплит (Ctrl+Shift+D)"><i class=ic-split></i></button>
         <button id="btn-sftp" class="btn small hidden">SFTP</button>
       </div>
@@ -80,9 +80,9 @@
   </div>
 
   <!-- Модалка SSH -->
-  <div id="modal-ssh" class="modal-backdrop hidden">
-    <div class="modal">
-      <h2>SSH подключение</h2>
+  <div id="modal-ssh" class="modal-backdrop hidden" role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ssh-dialog-title">
+      <h2 id="ssh-dialog-title">SSH подключение</h2>
       <label>Название (для списка)
         <input id="ssh-name" placeholder="Мой VPS" spellcheck="false">
       </label>
@@ -127,9 +127,9 @@
   </div>
 
   <!-- Модалка быстрой команды -->
-  <div id="modal-snippet" class="modal-backdrop hidden">
-    <div class="modal">
-      <h2>Быстрая команда</h2>
+  <div id="modal-snippet" class="modal-backdrop hidden" role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="snippet-dialog-title">
+      <h2 id="snippet-dialog-title">Быстрая команда</h2>
       <label>Название кнопки
         <input id="snip-name" placeholder="Логи nginx" spellcheck="false">
       </label>
@@ -144,7 +144,7 @@
     </div>
   </div>
 
-  <div id="toast" class="hidden"></div>
+  <div id="toast" class="hidden" role="status" aria-live="polite"></div>
 
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

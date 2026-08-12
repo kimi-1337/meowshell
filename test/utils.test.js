@@ -4,11 +4,14 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const test = require('node:test')
 const {
+  isDangerousRemoteTarget,
   normalizeConfig,
+  normalizeRemotePath,
   quotePathForShell,
   quotePosix,
   resolveLocalChild,
   safeEntryName,
+  safeRemoteEntryName,
   validPort,
 } = require('../src/main/utils')
 
@@ -20,6 +23,10 @@ test('normalizeConfig восстанавливает безопасную стр
   const polluted = JSON.parse('{"settings":{"__proto__":{"admin":true},"theme":"dark"}}')
   assert.deepEqual(normalizeConfig(polluted).settings, { theme: 'dark' })
   assert.equal({}.admin, undefined)
+
+  let nested = { value: true }
+  for (let i = 0; i < 40; i++) nested = { nested }
+  assert.throws(() => normalizeConfig({ settings: nested }), /слишком большую глубину/)
 })
 
 test('safeEntryName запрещает обход директорий', () => {
@@ -33,6 +40,18 @@ test('resolveLocalChild всегда оставляет файл внутри к
   const base = path.resolve('/tmp', 'meowshell-test-target')
   assert.equal(resolveLocalChild(base, 'file.txt'), path.join(base, 'file.txt'))
   assert.throws(() => resolveLocalChild(base, '..'))
+})
+
+test('удалённые SFTP-пути нормализуются и защищают корень', () => {
+  assert.equal(safeRemoteEntryName('отчёт:2026.txt'), 'отчёт:2026.txt')
+  for (const value of ['', '.', '..', '../secret', 'a/b', 'bad\0name']) {
+    assert.throws(() => safeRemoteEntryName(value), /Небезопасное имя/)
+  }
+  assert.equal(normalizeRemotePath('/srv/app/../logs'), '/srv/logs')
+  assert.equal(isDangerousRemoteTarget('/srv/..'), true)
+  assert.equal(isDangerousRemoteTarget('/./'), true)
+  assert.equal(isDangerousRemoteTarget('../private'), true)
+  assert.equal(isDangerousRemoteTarget('/srv/data'), false)
 })
 
 test('пути экранируются для POSIX и PowerShell', () => {
