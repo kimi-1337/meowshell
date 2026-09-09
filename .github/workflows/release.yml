@@ -27,7 +27,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --title "MeowShell $GITHUB_REF_NAME (Beta)" --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload."
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --prerelease \
+              --title "MeowShell $GITHUB_REF_NAME (Beta)" \
+              --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload." \
+              --generate-notes
           fi
 
   build:
@@ -116,7 +120,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           bundle="artifacts/MeowShell-${version}-release-bundle.zip"
           zip -0 -j "$bundle" artifacts/MeowShell-*-win-*-portable.zip artifacts/MeowShell-*-win-*-setup.exe artifacts/SHA256SUMS.txt LICENSE README.md README.ru.md
-          sha256sum "$bundle" >> artifacts/SHA256SUMS.txt
+          (
+            cd artifacts
+            sha256sum "MeowShell-${version}-release-bundle.zip"
+          ) >> artifacts/SHA256SUMS.txt
           manifests=(artifacts/latest.yml)
           channel="$(node -p "require('./scripts/merge-update-manifests').prereleaseChannel(require('./package.json').version)")"
           if test "$channel" != "latest"; then manifests+=("artifacts/${channel}.yml"); fi
