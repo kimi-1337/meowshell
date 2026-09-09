@@ -113,6 +113,11 @@ if (!pkg.dependencies || !/^\d+\.\d+\.\d+$/.test(pkg.dependencies['electron-upda
 if (!pkg.build || !pkg.build.publish || pkg.build.publish.provider !== 'github' || !pkg.build.publish.owner || !pkg.build.publish.repo) {
   fail('Для обновлятора должен быть задан фиксированный GitHub publish provider')
 }
+for (const name of ['dist', 'dist:zip', 'dist:installer', 'dist:ci:x64']) {
+  if (!pkg.scripts[name] || !pkg.scripts[name].includes('--publish never')) {
+    fail('Сборочный script не должен неявно публиковать артефакты из CI: ' + name)
+  }
+}
 for (const needle of ['updater.autoDownload = false', 'updater.autoInstallOnAppQuit = false', 'updater.allowDowngrade = false', 'updater.disableWebInstaller = true']) {
   if (!updater.includes(needle)) fail('Отсутствует защитная настройка обновлятора: ' + needle)
 }

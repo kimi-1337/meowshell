@@ -23,10 +23,10 @@
     "audit:acceptance": "node audit/acceptance.cjs",
     "verify": "npm run check && npm test",
     "ensure:win-pty": "node scripts/ensure-win-pty.js",
-    "dist": "npm run verify && npm run ensure:win-pty && electron-builder --win zip nsis --x64 --arm64",
-    "dist:zip": "npm run verify && npm run ensure:win-pty && electron-builder --win zip --x64 --arm64",
-    "dist:installer": "npm run verify && npm run ensure:win-pty && electron-builder --win nsis --x64 --arm64",
-    "dist:ci:x64": "npm run ensure:win-pty && electron-builder --win zip --x64"
+    "dist": "npm run verify && npm run ensure:win-pty && electron-builder --win zip nsis --x64 --arm64 --publish never",
+    "dist:zip": "npm run verify && npm run ensure:win-pty && electron-builder --win zip --x64 --arm64 --publish never",
+    "dist:installer": "npm run verify && npm run ensure:win-pty && electron-builder --win nsis --x64 --arm64 --publish never",
+    "dist:ci:x64": "npm run ensure:win-pty && electron-builder --win zip --x64 --publish never"
   },
   "engines": {
     "node": ">=22.12"
