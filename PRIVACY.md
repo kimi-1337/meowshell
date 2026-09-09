@@ -16,8 +16,14 @@ saved passwords or other authentication secrets.
 MeowShell opens network connections after an explicit user action, such as
 starting an SSH/SFTP connection or opening a link. If the user enables tab
 restoration or automatic tunnels, those saved SSH connections may also be opened
-when MeowShell starts. There is no background telemetry, account service, cloud
-synchronization, or automatic updater.
+when MeowShell starts.
+
+Packaged Windows builds from version `2.3.0-beta.5` onward periodically request
+public release metadata from GitHub Releases to check for a newer version. The
+request does not contain application settings, terminal contents, connection
+profiles, or credentials. An installer is downloaded only after the user clicks
+the download button, and installation requires another explicit click. There is
+no background telemetry, account service, or cloud synchronization.
 
 ## Crash diagnostics
 

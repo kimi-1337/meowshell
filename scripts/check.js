@@ -13,10 +13,12 @@ const files = [
   'src/main/main.js',
   'src/main/preload.js',
   'src/main/sftp-utils.js',
+  'src/main/updater.js',
   'src/main/utils.js',
   'src/renderer/renderer.js',
   'src/renderer/i18n.js',
   'scripts/ensure-win-pty.js',
+  'scripts/merge-update-manifests.js',
 ]
 
 for (const file of files) {
@@ -102,6 +104,21 @@ for (const file of ['README.md', 'README.ru.md', 'CHANGELOG.md']) {
 }
 if (pkg.license !== 'GPL-3.0-only') fail('package.json должен использовать GPL-3.0-only')
 if (!fs.existsSync(path.join(root, 'LICENSE'))) fail('Отсутствует файл LICENSE')
+
+const updater = read('src/main/updater.js')
+const releaseWorkflow = read('.github/workflows/release.yml')
+if (!pkg.dependencies || !/^\d+\.\d+\.\d+$/.test(pkg.dependencies['electron-updater'] || '')) {
+  fail('electron-updater должен быть закреплён точной runtime-версией')
+}
+if (!pkg.build || !pkg.build.publish || pkg.build.publish.provider !== 'github' || !pkg.build.publish.owner || !pkg.build.publish.repo) {
+  fail('Для обновлятора должен быть задан фиксированный GitHub publish provider')
+}
+for (const needle of ['updater.autoDownload = false', 'updater.autoInstallOnAppQuit = false', 'updater.allowDowngrade = false', 'updater.disableWebInstaller = true']) {
+  if (!updater.includes(needle)) fail('Отсутствует защитная настройка обновлятора: ' + needle)
+}
+for (const needle of ['*.blockmap', 'latest-${{ matrix.arch }}.yml', 'merge-update-manifests.js', 'artifacts/latest.yml']) {
+  if (!releaseWorkflow.includes(needle)) fail('Release workflow не публикует полный update feed: ' + needle)
+}
 
 for (const file of fs.readdirSync(path.join(root, '.github', 'workflows')).filter((name) => /\.ya?ml$/i.test(name))) {
   const source = read(path.join('.github', 'workflows', file))

@@ -61,6 +61,14 @@ contextBridge.exposeInMainWorld('api', {
   localResourceUrl: (path, type) => ipcRenderer.invoke('app:local-resource', { path, type }),
   fontsList: () => ipcRenderer.invoke('fonts:list'),
 
+  // обновления: renderer получает только безопасное состояние и команды,
+  // а скачивание/проверка/установка полностью остаются в main process.
+  getUpdateState: () => ipcRenderer.invoke('update:get-state'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateState: (cb) => ipcRenderer.on('update:state', (e, state) => cb(state)),
+
   // кнопки собственной шапки окна
   winMinimize: () => ipcRenderer.send('win:minimize'),
   winMaximizeToggle: () => ipcRenderer.send('win:maximize-toggle'),

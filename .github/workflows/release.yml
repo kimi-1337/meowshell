@@ -51,6 +51,9 @@ jobs:
       - name: Build ZIP and NSIS installer
         shell: pwsh
         run: npx electron-builder --win zip nsis --${{ matrix.arch }} --publish never
+      - name: Preserve architecture update manifest
+        shell: pwsh
+        run: Copy-Item dist/latest.yml "dist/latest-${{ matrix.arch }}.yml"
       - name: Smoke-test packaged x64 application
         if: matrix.arch == 'x64'
         shell: pwsh
@@ -83,10 +86,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = @(
-            Get-ChildItem dist/*.zip,dist/*.exe
+            Get-ChildItem dist/*.zip,dist/*.exe,dist/*.blockmap
+            Get-Item "dist/latest-${{ matrix.arch }}.yml"
             Get-Item "dist/SHA256SUMS-${{ matrix.arch }}.txt"
           )
-          if ($files.Count -lt 3) { throw "Release files are missing" }
+          if ($files.Count -lt 5) { throw "Release files are missing" }
           $arguments = @("release", "upload", $env:GITHUB_REF_NAME) + $files.FullName + @("--repo", $env:GITHUB_REPOSITORY, "--clobber")
           & gh @arguments
           if ($LASTEXITCODE -ne 0) { throw "Could not upload architecture files" }
@@ -96,18 +100,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.12
+          cache: npm
+      - run: npm ci --ignore-scripts
       - name: Publish GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir artifacts
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "MeowShell-*-win-*-portable.zip" --pattern "MeowShell-*-win-*-setup.exe" --pattern "SHA256SUMS-*.txt" --dir artifacts
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "MeowShell-*-win-*-portable.zip" --pattern "MeowShell-*-win-*-setup.exe" --pattern "*.blockmap" --pattern "latest-*.yml" --pattern "SHA256SUMS-*.txt" --dir artifacts
+          node scripts/merge-update-manifests.js artifacts/latest-x64.yml artifacts/latest-arm64.yml artifacts/latest.yml
           cat artifacts/SHA256SUMS-*.txt | sort > artifacts/SHA256SUMS.txt
           version="${GITHUB_REF_NAME#v}"
           bundle="artifacts/MeowShell-${version}-release-bundle.zip"
           zip -0 -j "$bundle" artifacts/MeowShell-*-win-*-portable.zip artifacts/MeowShell-*-win-*-setup.exe artifacts/SHA256SUMS.txt LICENSE README.md README.ru.md
           sha256sum "$bundle" >> artifacts/SHA256SUMS.txt
-          gh release upload "$GITHUB_REF_NAME" artifacts/SHA256SUMS.txt "artifacts/MeowShell-${version}-release-bundle.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          manifests=(artifacts/latest.yml)
+          channel="$(node -p "require('./scripts/merge-update-manifests').prereleaseChannel(require('./package.json').version)")"
+          if test "$channel" != "latest"; then manifests+=("artifacts/${channel}.yml"); fi
+          gh release upload "$GITHUB_REF_NAME" artifacts/SHA256SUMS.txt "artifacts/MeowShell-${version}-release-bundle.zip" "${manifests[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           gh release delete-asset "$GITHUB_REF_NAME" SHA256SUMS-x64.txt --repo "$GITHUB_REPOSITORY" --yes
           gh release delete-asset "$GITHUB_REF_NAME" SHA256SUMS-arm64.txt --repo "$GITHUB_REPOSITORY" --yes
+          gh release delete-asset "$GITHUB_REF_NAME" latest-x64.yml --repo "$GITHUB_REPOSITORY" --yes
+          gh release delete-asset "$GITHUB_REF_NAME" latest-arm64.yml --repo "$GITHUB_REPOSITORY" --yes
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false

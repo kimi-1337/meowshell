@@ -37,6 +37,18 @@
     </aside>
 
     <main id="main">
+      <section id="update-banner" class="update-banner hidden" role="status" aria-live="polite">
+        <div class="update-mark" aria-hidden="true"><i class="ic-download"></i></div>
+        <div class="update-copy">
+          <strong id="update-title">Доступно обновление MeowShell</strong>
+          <span id="update-detail"></span>
+          <div id="update-progress" class="update-progress hidden" aria-hidden="true">
+            <div id="update-progress-fill" class="update-progress-fill"></div>
+          </div>
+        </div>
+        <button id="update-action" class="btn primary small" type="button">Скачать</button>
+        <button id="update-dismiss" class="update-dismiss" type="button" title="Скрыть уведомление" aria-label="Скрыть уведомление"><i class="ic-x"></i></button>
+      </section>
       <div id="snippets-bar">
         <div id="snippets"></div>
         <button id="btn-snippet-add" class="btn small" title="Добавить быструю команду"><i class=ic-plus></i> команда</button>

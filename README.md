@@ -42,22 +42,24 @@
 
 [View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
 
-The `main` branch also contains the unreleased audit hardening listed in
-[CHANGELOG.md](CHANGELOG.md); downloadable binaries always correspond to their
-tagged source.
+The `main` branch contains the unreleased `2.3.0-beta.5` audit hardening and
+in-app updater listed in [CHANGELOG.md](CHANGELOG.md); downloadable binaries
+always correspond to their tagged source.
 
 MeowShell is a privacy-first, customizable desktop terminal for Windows. It combines
 local shell tabs, SSH, SFTP, split panes, tunnels, monitoring, themes, and quick
 commands in one Electron application.
 
 The application contains no telemetry, tracking, cloud synchronization, or
-automatic crash upload. Network connections happen after a user action or when
-the user has explicitly enabled startup restoration for SSH tabs and tunnels.
+automatic crash upload. Network connections happen after a user action, when
+the user has explicitly enabled startup restoration for SSH tabs and tunnels,
+or for the periodic GitHub Releases version check in packaged Windows builds.
 See [PRIVACY.md](PRIVACY.md) for the exact policy.
 
 ## Status and compatibility
 
 - Release: `2.3.0-beta.4`
+- Development version: `2.3.0-beta.5`
 - Packages: Windows x64 and Windows ARM64
 - Formats: NSIS installer and extracted portable ZIP
 - Confirmed hardware test: Windows 10 x64, NVIDIA GPU, AMD CPU
@@ -80,6 +82,7 @@ should be treated as experimental until it receives a real-device runtime test.
 - Screenshot/file paste as a correctly quoted local or remote path
 - Themes, backgrounds, custom fonts, smooth input/output text animation, typing effects, and quake mode
 - Settings search, local diagnostics, GPU safe mode, and first-run onboarding
+- In-terminal update notices with explicit download, progress, and install/restart controls
 - Secret-free configuration export/import, recovery from a valid local backup,
   and a deliberate no-backup full-data reset
 
@@ -93,7 +96,10 @@ Download the artifact for your architecture from GitHub Releases:
 
 Do not run the extracted application from a temporary archive directory. Releases
 are currently unsigned; verify the published SHA-256 checksum before running a
-downloaded artifact.
+downloaded artifact. Windows builds from `2.3.0-beta.5` onward also check GitHub
+Releases in the background and show an in-terminal prompt. Download and
+installation require an explicit click; the updater verifies the release
+manifest's SHA-512 before launch.
 
 ## Development
 
@@ -157,6 +163,7 @@ unredacted configuration, or production host details to an issue.
 
 ```text
 src/main/main.js       Electron main process, IPC, PTY, SSH/SFTP
+src/main/updater.js    guarded update state, download, and installation controller
 src/main/preload.js    isolated renderer API
 src/main/utils.js      config, path, port, and shell-quoting helpers
 src/main/sftp-utils.js bounded and atomic SFTP file operations
@@ -168,7 +175,7 @@ audit/                 baseline findings and remediation acceptance checks
 
 ## Known beta limitations
 
-- No automatic updater and no code-signing certificate yet
+- Release binaries do not have a code-signing certificate yet
 - Linux resource monitoring expects `/proc`, `free`, and `df`
 - SFTP drag-and-drop uploads files, not directories
 - ARM64 packages do not yet have a documented physical-device test

@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2.3.0-beta.5 (unreleased)
 
+- added in-terminal update notifications, manual background download progress,
+  one-click install/restart, periodic checks, and a settings status/control;
+- added SHA-512-verified NSIS update metadata for x64 and ARM64 releases, plus
+  regression tests that reject mixed-version or unsafe update manifests;
 - fixed all 20 findings from the 2026 security and reliability audit, including
   reconnect input routing, credential binding, guarded native paste, session
   lifecycle, configuration validation, and visible persistence failures;

@@ -104,6 +104,9 @@ let toastTimer = null
 let rendererSafeMode = false
 let rendererSmokeTest = false
 let rendererPlatform = ''
+let currentAppVersion = ''
+let updateState = { supported: false, status: 'unsupported', currentVersion: '' }
+let dismissedUpdateKey = ''
 let settingsSaveQueue = Promise.resolve()
 
 // ---------- утилиты ----------
@@ -142,6 +145,121 @@ function fmtSize(n) {
   if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
   return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
 }
+
+function updateKey(state) {
+  return String(state.version || state.currentVersion || '') + ':' + String(state.status || '')
+}
+
+function updateStatusText(state) {
+  const version = state.version ? ' ' + state.version : ''
+  switch (state.status) {
+    case 'checking': return uiText('Checking for updates…', 'Проверяем обновления…')
+    case 'available': return uiText('Version' + version + ' is ready to download', 'Версия' + version + ' готова к скачиванию')
+    case 'downloading': return uiText('Downloading' + version + ': ' + Math.round(state.percent || 0) + '%', 'Скачиваем' + version + ': ' + Math.round(state.percent || 0) + '%')
+    case 'downloaded': return uiText('Version' + version + ' is downloaded and ready to install', 'Версия' + version + ' скачана и готова к установке')
+    case 'installing': return uiText('Installing the update…', 'Устанавливаем обновление…')
+    case 'up-to-date': return uiText('You have the latest version', 'Установлена последняя версия')
+    case 'error': return uiText('Update error: ', 'Ошибка обновления: ') + (state.error || uiText('unknown error', 'неизвестная ошибка'))
+    case 'idle': return uiText('Automatic update checks are enabled', 'Автоматическая проверка обновлений включена')
+    default: return uiText('Updates are available in an installed Windows build', 'Обновления доступны в установленной версии для Windows')
+  }
+}
+
+function renderUpdateSettings() {
+  const status = document.querySelector('#st-update-status')
+  const button = document.querySelector('#st-update-check')
+  const version = document.querySelector('#st-app-version')
+  if (status) status.textContent = updateStatusText(updateState)
+  if (version) version.textContent = 'MeowShell v' + (currentAppVersion || updateState.currentVersion || '—') + ' · Electron + xterm.js'
+  if (!button) return
+  button.disabled = !updateState.supported || ['checking', 'downloading', 'downloaded', 'installing'].includes(updateState.status)
+  button.textContent = updateState.status === 'checking'
+    ? uiText('Checking…', 'Проверяем…')
+    : uiText('Check', 'Проверить')
+}
+
+function renderUpdateState(nextState) {
+  if (!nextState || typeof nextState !== 'object') return
+  updateState = Object.assign({}, updateState, nextState)
+  const banner = $('#update-banner')
+  const status = String(updateState.status || 'idle')
+  const visible = updateState.supported && (
+    ['available', 'downloading', 'downloaded', 'installing'].includes(status) ||
+    (updateState.manual && ['checking', 'up-to-date', 'error'].includes(status))
+  ) && dismissedUpdateKey !== updateKey(updateState)
+  banner.classList.toggle('hidden', !visible)
+  banner.dataset.status = status
+
+  const version = updateState.version ? ' ' + updateState.version : ''
+  const title = $('#update-title')
+  const detail = $('#update-detail')
+  const action = $('#update-action')
+  const progress = $('#update-progress')
+  const fill = $('#update-progress-fill')
+  let actionKind = ''
+  title.textContent = updateStatusText(updateState)
+  detail.textContent = ''
+
+  if (status === 'available') {
+    title.textContent = uiText('A new MeowShell version is available', 'Доступно новое обновление MeowShell')
+    detail.textContent = uiText('Version' + version + '. Download it without leaving the terminal.', 'Версия' + version + '. Скачай её, не выходя из терминала.')
+    action.textContent = uiText('Download', 'Скачать')
+    actionKind = 'download'
+  } else if (status === 'downloading') {
+    title.textContent = uiText('Downloading MeowShell' + version, 'Скачиваем MeowShell' + version)
+    const parts = []
+    if (updateState.total) parts.push(fmtSize(updateState.transferred || 0) + ' / ' + fmtSize(updateState.total))
+    if (updateState.bytesPerSecond) parts.push(fmtSize(updateState.bytesPerSecond) + '/s')
+    detail.textContent = parts.join(' · ') || uiText('The installer is downloaded securely in the background', 'Установщик безопасно скачивается в фоне')
+  } else if (status === 'downloaded') {
+    title.textContent = uiText('The update is ready to install', 'Обновление готово к установке')
+    detail.textContent = uiText('Version' + version + '. MeowShell will restart; open sessions will close.', 'Версия' + version + '. MeowShell перезапустится, открытые сессии закроются.')
+    action.textContent = uiText('Install and restart', 'Установить и перезапустить')
+    actionKind = 'install'
+  } else if (status === 'installing') {
+    detail.textContent = uiText('Closing MeowShell and starting the verified installer…', 'Закрываем MeowShell и запускаем проверенный установщик…')
+  } else if (status === 'checking') {
+    detail.textContent = uiText('This usually takes a few seconds.', 'Обычно это занимает несколько секунд.')
+  } else if (status === 'up-to-date') {
+    detail.textContent = uiText('Current version: ', 'Текущая версия: ') + (updateState.currentVersion || currentAppVersion || '—')
+  } else if (status === 'error') {
+    title.textContent = uiText('Could not update MeowShell', 'Не удалось обновить MeowShell')
+    detail.textContent = updateState.error || uiText('Check the internet connection and try again.', 'Проверь подключение к интернету и повтори попытку.')
+    action.textContent = uiText('Retry', 'Повторить')
+    actionKind = 'check'
+  }
+
+  action.dataset.action = actionKind
+  action.classList.toggle('hidden', !actionKind)
+  action.disabled = false
+  const showProgress = status === 'downloading' || status === 'downloaded'
+  progress.classList.toggle('hidden', !showProgress)
+  fill.style.width = Math.max(0, Math.min(100, status === 'downloaded' ? 100 : Number(updateState.percent) || 0)) + '%'
+  renderUpdateSettings()
+}
+
+$('#update-action').addEventListener('click', async () => {
+  const action = $('#update-action').dataset.action
+  $('#update-action').disabled = true
+  try {
+    let state
+    if (action === 'download') state = await window.api.downloadUpdate()
+    else if (action === 'install') state = await window.api.installUpdate()
+    else if (action === 'check') state = await window.api.checkForUpdates()
+    if (state) renderUpdateState(state)
+  } catch (err) {
+    toast(uiText('Update error: ', 'Ошибка обновления: ') + (err && err.message ? err.message : err), true)
+  } finally {
+    $('#update-action').disabled = false
+  }
+})
+
+$('#update-dismiss').addEventListener('click', () => {
+  dismissedUpdateKey = updateKey(updateState)
+  $('#update-banner').classList.add('hidden')
+})
+
+window.api.onUpdateState((state) => renderUpdateState(state))
 
 function fitTab(tab) {
   if (!tab || !tab.fit || tab.paneEl.classList.contains('hidden')) return
@@ -911,6 +1029,7 @@ async function init() {
   const cfg = await window.api.getConfig()
   rendererSmokeTest = cfg.smokeTest === true
   rendererPlatform = cfg.platform || ''
+  currentAppVersion = cfg.appVersion || ''
   if (rendererSmokeTest && cfg.configNotice) throw new Error(cfg.configNotice)
   connections = cfg.connections || []
   settings = Object.assign({}, settings, cfg.settings || {})
@@ -922,6 +1041,7 @@ async function init() {
   renderConnections()
   renderSnippets()
   updateEmptyState()
+  try { renderUpdateState(await window.api.getUpdateState()) } catch {}
   if (cfg.configNotice) toast(cfg.configNotice, true)
   if (cfg.securityWarning) setTimeout(() => toast(cfg.securityWarning, true), cfg.configNotice ? 4300 : 0)
   else if (rendererSafeMode) setTimeout(() => toast('Безопасный режим: GPU-рендеринг отключён после прошлого сбоя'), cfg.configNotice ? 4300 : 0)
@@ -1874,6 +1994,11 @@ function settingsPaneHtml() {
         <div class="set-row"><label>Импорт серверов из Tabby</label><button id="st-import-tabby" class="btn small" type="button">Импортировать…</button></div>
       </div>
       <div class="set-card">
+        <b>Обновления</b>
+        <div class="set-row"><label id="st-update-status">Автоматическая проверка обновлений включена</label><button id="st-update-check" class="btn small" type="button">Проверить</button></div>
+        <div class="set-hint">Установщик скачивается только с GitHub Releases и проверяется по SHA-512 перед запуском. Установка выполняется только после подтверждения.</div>
+      </div>
+      <div class="set-card">
         <b>Данные и диагностика</b>
         <div class="set-row"><label>Экспорт без паролей и ключевых фраз</label><button id="st-export" class="btn small" type="button">Экспортировать…</button></div>
         <div class="set-row"><label>Импорт конфигурации</label><button id="st-import" class="btn small" type="button">Импортировать…</button></div>
@@ -1886,7 +2011,7 @@ function settingsPaneHtml() {
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
       <div class="set-card">
-        <div class="set-hint">MeowShell v2.3.0-beta.4 · Electron + xterm.js</div>
+        <div id="st-app-version" class="set-hint">MeowShell v2.3.0-beta.5 · Electron + xterm.js</div>
       </div>
     </section>
   </div>
@@ -1970,12 +2095,14 @@ function buildSettingsPane(paneEl) {
   if (rendererSafeMode) q('#st-webgl').title = 'Отключено безопасным режимом после сбоя renderer/GPU'
   q('#st-reconnect').checked = settings.autoReconnect !== false
   q('#st-safe-row').classList.toggle('hidden', !rendererSafeMode)
+  renderUpdateSettings()
 
   // обработчики — всё применяется сразу
   q('#st-theme').addEventListener('change', () => { settings.theme = q('#st-theme').value; applyAllSettings() })
   q('#st-language').addEventListener('change', () => {
     settings.language = q('#st-language').value
     if (window.MeowI18n) window.MeowI18n.setLanguage(settings.language)
+    renderUpdateState(updateState)
     applyAllSettings()
   })
   q('#st-typingfx').addEventListener('change', () => { settings.typingFx = q('#st-typingfx').value; applyAllSettings() })
@@ -2048,6 +2175,14 @@ function buildSettingsPane(paneEl) {
     connections = (r.view && r.view.connections) || connections
     renderConnections()
     toast(r.added ? 'Импортировано серверов: ' + r.added + '. Пароли Tabby не отдаёт — введи их при первом входе' : 'Новых серверов не найдено')
+  })
+  q('#st-update-check').addEventListener('click', async () => {
+    try {
+      dismissedUpdateKey = ''
+      renderUpdateState(await window.api.checkForUpdates())
+    } catch (err) {
+      toast(uiText('Update error: ', 'Ошибка обновления: ') + (err && err.message ? err.message : err), true)
+    }
   })
 
   const showDiagnostics = async () => {

@@ -5,6 +5,7 @@ const os = require('os')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
 const { pathToFileURL } = require('url')
+const { createUpdateController } = require('./updater')
 const {
   MAX_CONFIG_BYTES,
   MAX_EDITOR_BYTES,
@@ -468,6 +469,7 @@ function cfgView(cfg) {
     }
   } catch {}
   return {
+    appVersion: app.getVersion(),
     settings: Object.assign({}, cfg.settings || {}, safeMode ? { webglRenderer: false } : {}),
     safeMode,
     smokeTest: ciSmokeTest,
@@ -596,6 +598,34 @@ function handleIpc(channel, handler) {
   })
 }
 
+// ---------- обновления приложения ----------
+
+let updateController = createUpdateController({ app, publishState: (state) => send('update:state', state) })
+
+function setupAutoUpdater() {
+  let updater = null
+  if (process.platform === 'win32' && app.isPackaged) {
+    try {
+      updater = require('electron-updater').autoUpdater
+    } catch (err) {
+      logLine('[updater] модуль не загружен: ' + err.message)
+    }
+  }
+  updateController.dispose()
+  updateController = createUpdateController({
+    app,
+    updater,
+    publishState: (state) => send('update:state', state),
+    logLine,
+  })
+  updateController.start({ automatic: !ciSmokeTest })
+}
+
+handleIpc('update:get-state', () => updateController.getState())
+handleIpc('update:check', () => updateController.check(true))
+handleIpc('update:download', () => updateController.download())
+handleIpc('update:install', () => updateController.install())
+
 // ---------- окно ----------
 
 function createWindow() {
@@ -667,9 +697,11 @@ app.whenReady().then(() => {
   })
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   createWindow()
+  setupAutoUpdater()
 })
 
 app.on('window-all-closed', () => {
+  updateController.dispose()
   for (const client of pendingSshClients.values()) {
     try { client.destroy() } catch {}
   }

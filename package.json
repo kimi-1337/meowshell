@@ -1,6 +1,6 @@
 {
   "name": "meowshell",
-  "version": "2.3.0-beta.4",
+  "version": "2.3.0-beta.5",
   "private": true,
   "license": "GPL-3.0-only",
   "author": {
@@ -36,6 +36,13 @@
     "productName": "MeowShell",
     "directories": {
       "output": "dist"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "kimi-1337",
+      "repo": "meowshell",
+      "releaseType": "prerelease",
+      "channel": "latest"
     },
     "files": [
       "src/**/*",
@@ -126,6 +133,7 @@
     "@xterm/addon-web-links": "0.11.0",
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "5.5.0",
+    "electron-updater": "6.8.9",
     "js-yaml": "4.3.2",
     "ssh2": "1.17.0"
   },
