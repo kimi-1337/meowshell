@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0-beta.5 (unreleased)
+## 2.3.0-beta.5
 
 - added in-terminal update notifications, manual background download progress,
   one-click install/restart, periodic checks, and a settings status/control;

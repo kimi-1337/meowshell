@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml/badge.svg"></a>
-  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4"><img alt="Релиз 2.3.0 beta 4" src="https://img.shields.io/badge/release-2.3.0--beta.4-f59e0b"></a>
+  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.5"><img alt="Релиз 2.3.0 beta 5" src="https://img.shields.io/badge/release-2.3.0--beta.5-f59e0b"></a>
   <a href="LICENSE"><img alt="GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-2ea44f"></a>
 </p>
 
@@ -31,21 +31,21 @@
 
 ## Скачать
 
-### [Скачать MeowShell для Windows x64 — установщик (рекомендуется)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe)
+### [Скачать MeowShell для Windows x64 — установщик (рекомендуется)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-win-x64-setup.exe)
 
 | Версия | Скачать |
 |---|---|
-| Windows x64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-setup.exe) |
-| Windows x64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-x64-portable.zip) |
-| Windows ARM64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-setup.exe) |
-| Windows ARM64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-win-arm64-portable.zip) |
-| Полный комплект релиза | [Скачать общий `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.4/MeowShell-2.3.0-beta.4-release-bundle.zip) |
+| Windows x64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-win-x64-setup.exe) |
+| Windows x64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-win-x64-portable.zip) |
+| Windows ARM64, установщик | [Скачать `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-win-arm64-setup.exe) |
+| Windows ARM64, portable | [Скачать `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-win-arm64-portable.zip) |
+| Полный комплект релиза | [Скачать общий `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.5/MeowShell-2.3.0-beta.5-release-bundle.zip) |
 
-[Все файлы релиза и контрольные суммы SHA-256](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
+[Все файлы релиза и контрольные суммы SHA-256](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.5)
 
-В ветке `main` находится ещё не выпущенная `2.3.0-beta.5` с исправлениями аудита
-и встроенным обновлятором из [CHANGELOG.md](CHANGELOG.md); скачиваемые бинарные
-файлы всегда соответствуют исходникам своего тега.
+В релиз `2.3.0-beta.5` входят исправления аудита и встроенный обновлятор из
+[CHANGELOG.md](CHANGELOG.md). Скачиваемые бинарные файлы соответствуют исходникам
+своего тега.
 
 MeowShell — приватный и настраиваемый настольный терминал для Windows. Он
 объединяет локальные вкладки, SSH, SFTP, сплиты, туннели, мониторинг, темы и
@@ -59,8 +59,7 @@ MeowShell — приватный и настраиваемый настольн�
 
 ## Статус и совместимость
 
-- Версия: `2.3.0-beta.4`
-- Версия в разработке: `2.3.0-beta.5`
+- Версия: `2.3.0-beta.5`
 - Сборки: Windows x64 и Windows ARM64
 - Форматы: NSIS-установщик и portable ZIP с каталогом приложения
 - Проверенная конфигурация: Windows 10 x64, NVIDIA GPU, AMD CPU
