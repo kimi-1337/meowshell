@@ -1,4 +1,27 @@
-# MeowShell 2.3.0 Beta
+<p align="center">
+  <img src="assets/logo.png" width="150" alt="MeowShell cat logo">
+</p>
+
+<h1 align="center">MeowShell</h1>
+
+<p align="center">
+  A privacy-first Windows terminal for local shells, SSH, SFTP, and focused remote work.
+</p>
+
+<p align="center">
+  <a href="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml/badge.svg"></a>
+  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4"><img alt="Release 2.3.0 beta 4" src="https://img.shields.io/badge/release-2.3.0--beta.4-f59e0b"></a>
+  <a href="LICENSE"><img alt="GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-2ea44f"></a>
+</p>
+
+<p align="center">
+  <a href="#download">Download</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#development">Development</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
 
 > **Beta software.** Back up important data before testing. The current build is
 > unsigned and may trigger Microsoft Defender SmartScreen.
@@ -19,7 +42,11 @@
 
 [View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
 
-MeowShell is a private, customizable desktop terminal for Windows. It combines
+The `main` branch also contains the unreleased audit hardening listed in
+[CHANGELOG.md](CHANGELOG.md); downloadable binaries always correspond to their
+tagged source.
+
+MeowShell is a privacy-first, customizable desktop terminal for Windows. It combines
 local shell tabs, SSH, SFTP, split panes, tunnels, monitoring, themes, and quick
 commands in one Electron application.
 
@@ -38,15 +65,15 @@ See [PRIVACY.md](PRIVACY.md) for the exact policy.
 
 Windows x86/32-bit is not shipped: x86 and x32 refer to the same 32-bit target,
 and the current PTY/runtime dependency set does not provide a reliable ia32
-release path. Windows 10/11 x64 is the primary target; ARM64 is built and checked
-by CI but should be treated as beta until it receives a real-device test.
+release path. Windows 10/11 x64 is the primary target; ARM64 is built by CI but
+should be treated as experimental until it receives a real-device runtime test.
 
 ## Features
 
 - Local `cmd`, PowerShell, or a custom shell
 - SSH with password or private-key authentication
 - SSH host-key verification and change detection
-- SFTP navigation, upload/download, rename, chmod, removal, and text editing
+- SFTP navigation, atomic upload/download/edit, rename, chmod, and guarded removal
 - Vertical and horizontal split panes
 - SSH reconnect, local port forwarding, and optional Linux resource monitoring
 - Broadcast input, command palette, terminal search, and guarded multiline paste
@@ -76,6 +103,8 @@ representative local-PTY test.
 ```powershell
 npm ci
 npm run verify
+npm run audit:acceptance
+npm audit --audit-level=high
 npm start
 ```
 
@@ -130,9 +159,11 @@ unredacted configuration, or production host details to an issue.
 src/main/main.js       Electron main process, IPC, PTY, SSH/SFTP
 src/main/preload.js    isolated renderer API
 src/main/utils.js      config, path, port, and shell-quoting helpers
+src/main/sftp-utils.js bounded and atomic SFTP file operations
 src/renderer/          HTML, CSS, localization, and interface logic
 scripts/               static checks and native PTY packaging helper
 test/                  Node unit tests
+audit/                 baseline findings and remediation acceptance checks
 ```
 
 ## Known beta limitations

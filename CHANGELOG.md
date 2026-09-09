@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- fixed all 20 findings from the 2026 security and reliability audit, including
+  reconnect input routing, credential binding, guarded native paste, session
+  lifecycle, configuration validation, and visible persistence failures;
+- made SFTP listing and editing bounded, uploads/downloads atomic, overwrite
+  explicit, paste-media permissions verified, and editor conflicts detectable;
+- upgraded vulnerable dependency paths (`js-yaml`, `@xmldom/xmldom`, and
+  `fast-uri`); `npm audit` now reports zero known vulnerabilities;
+- expanded the runtime smoke to exercise a real local PTY with input, output,
+  resize, and a nonce; hardened release version checks, x64 artifact smoke, and
+  bundle checksums;
+- added audit acceptance checks, SFTP regression tests, async key generation,
+  OpenSSH-style fingerprints, stricter private-key handling, and lockfile
+  integrity verification for cross-compiled Windows PTY packages.
+
 ## 2.3.0-beta.4
 
 - added an optional, reduced-motion-aware animation for terminal text input and
@@ -16,8 +32,8 @@
 - made full-data reset actually remove backups and local diagnostics without
   silently preserving an encrypted-secrets backup, and aligned the privacy docs;
 - escaped custom-font option markup and improved keyboard/dialog accessibility;
-- updated Electron to 41.10.5 and js-yaml to 4.3.1, resolving all currently
-  reported npm audit findings;
+- updated Electron to 41.10.5 and js-yaml to 4.3.1, resolving the findings
+  reported at the time of that release;
 - moved diagnostic logs from the shared temporary directory into private app
   data and pinned GitHub Actions to reviewed commit hashes;
 - expanded unit and static regression checks and corrected documented artifact

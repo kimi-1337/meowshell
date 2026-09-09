@@ -3,18 +3,38 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 const crypto = require('crypto')
+const { execFile } = require('child_process')
 const { pathToFileURL } = require('url')
 const {
+  MAX_CONFIG_BYTES,
+  MAX_EDITOR_BYTES,
+  destroyResources,
+  formatSshCommand,
   isDangerousRemoteTarget,
   normalizeConfig,
   normalizeRemotePath,
   quotePathForShell,
   quotePosix,
   resolveLocalChild,
+  resolveSshConnection,
   safeEntryName,
   safeRemoteEntryName,
+  sanitizeConnection,
   validPort,
+  validSshEndpoint,
 } = require('./utils')
+const {
+  atomicRemoteWrite,
+  call: callSftp,
+  ensurePrivateDirectory,
+  fastGetAtomic,
+  fastPutAtomic,
+  fileVersion,
+  getRetryableSftp,
+  lstatMaybe,
+  readDirectoryLimited,
+  readFileLimited,
+} = require('./sftp-utils')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'app',
@@ -149,6 +169,7 @@ const { Client } = require('ssh2')
 let win = null
 let nextId = 1
 const sessions = new Map() // id -> { type, write, resize, kill, client? }
+const pendingSshClients = new Map()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 else app.on('second-instance', () => {
@@ -168,7 +189,7 @@ let configRecovery = null
 
 function readConfigDocument(file) {
   const stat = fs.lstatSync(file)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CONFIG_BYTES) {
     throw new Error('Конфигурация не является обычным JSON-файлом допустимого размера')
   }
   return normalizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')))
@@ -218,7 +239,15 @@ function migrateLegacySecrets(cfg, allowSave = true) {
       }
     }
   }
-  if (changed && allowSave) saveConfig(cfg)
+  const stillPlaintext = cfg.connections.some((connection) =>
+    ['password', 'passphrase'].some((field) => {
+      const value = connection[field]
+      return typeof value === 'string' && value && !value.startsWith('enc:')
+    })
+  )
+  // Никогда не создаём новую копию конфига с открытым секретом. Если системное
+  // шифрование временно недоступно, старый файл остаётся только для чтения.
+  if (changed && allowSave && !stillPlaintext) saveConfig(cfg)
   return cfg
 }
 
@@ -231,9 +260,10 @@ function loadConfig() {
       const quarantined = quarantineBrokenConfig(current, err)
       const recovered = latestConfigBackup()
       if (recovered) {
-        const restored = !!quarantined && saveConfig(recovered.config)
+        const recoveredConfig = migrateLegacySecrets(recovered.config, false)
+        const restored = !!quarantined && saveConfig(recoveredConfig)
         configRecovery = { type: 'backup', source: recovered.file, quarantined, restored }
-        return migrateLegacySecrets(recovered.config, restored)
+        return recoveredConfig
       }
       const empty = normalizeConfig(null)
       const restored = !!quarantined && saveConfig(empty)
@@ -251,9 +281,17 @@ function loadConfig() {
     ]
     for (const oldFile of candidates) {
       if (fs.existsSync(oldFile)) {
-        const cfg = normalizeConfig(JSON.parse(fs.readFileSync(oldFile, 'utf8')))
-        saveConfig(cfg)
-        return migrateLegacySecrets(cfg)
+        const cfg = migrateLegacySecrets(
+          normalizeConfig(JSON.parse(fs.readFileSync(oldFile, 'utf8'))),
+          false
+        )
+        const hasPlaintext = cfg.connections.some((connection) =>
+          [connection.password, connection.passphrase].some((value) =>
+            typeof value === 'string' && value && !value.startsWith('enc:')
+          )
+        )
+        if (!hasPlaintext) saveConfig(cfg)
+        return cfg
       }
     }
   } catch {}
@@ -274,15 +312,54 @@ function mt(english, russian) {
 function saveConfig(cfg) {
   try {
     const file = configPath()
-    const tmp = file + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex')
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(tmp, JSON.stringify(normalizeConfig(cfg), null, 2), { mode: 0o600 })
-    fs.renameSync(tmp, file)
-    try { fs.chmodSync(file, 0o600) } catch {}
+    const normalized = normalizeConfig(cfg)
+    if (normalized.connections.some((connection) =>
+      [connection.password, connection.passphrase].some((value) =>
+        typeof value === 'string' && value && !value.startsWith('enc:')
+      ))) {
+      throw new Error('Конфигурация содержит незашифрованный секрет; сохранение отменено')
+    }
+    const document = JSON.stringify(normalized, null, 2)
+    if (Buffer.byteLength(document, 'utf8') > MAX_CONFIG_BYTES) {
+      throw new Error('Конфигурация превышает допустимый размер')
+    }
+    replaceLocalFile(file, document, 0o600)
     return true
   } catch (err) {
     console.error('Не удалось сохранить конфиг:', err.message)
     return false
+  }
+}
+
+function replaceLocalFile(file, data, mode = 0o600) {
+  const target = path.resolve(file)
+  const tmp = target + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex')
+  const backup = target + '.replace-' + crypto.randomBytes(4).toString('hex')
+  let hadTarget = false
+  let installed = false
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  try {
+    fs.writeFileSync(tmp, data, { mode, flag: 'wx' })
+    try {
+      fs.renameSync(tmp, target)
+      installed = true
+    } catch (renameError) {
+      // libuv обычно заменяет файл атомарно и на Windows. Fallback нужен для
+      // отдельных файловых систем, которые возвращают EEXIST/EPERM.
+      if (process.platform !== 'win32' || !fs.existsSync(target)) throw renameError
+      fs.renameSync(target, backup)
+      hadTarget = true
+      fs.renameSync(tmp, target)
+      installed = true
+    }
+    try { fs.chmodSync(target, mode) } catch {}
+    if (hadTarget) fs.unlinkSync(backup)
+  } catch (err) {
+    if (installed) { try { fs.unlinkSync(target) } catch {} }
+    if (hadTarget) { try { fs.renameSync(backup, target) } catch {} }
+    throw err
+  } finally {
+    try { fs.unlinkSync(tmp) } catch {}
   }
 }
 
@@ -300,23 +377,28 @@ function backupConfig(label = 'backup') {
 
 function exportableConfig(cfg) {
   const normalized = normalizeConfig(cfg)
-  const settings = Object.assign({}, normalized.settings)
-  delete settings.bgImage
-  delete settings.lastTabs
-  delete settings.onboardingComplete
+  const settings = Object.assign({}, normalized.settings, {
+    // Snippets can contain passwords and tokens embedded by the user.
+    snippets: [],
+  })
+  for (const key of [
+    'bgImage', 'lastTabs', 'onboardingComplete', 'shell', 'quakeEnabled',
+    'quakeHotkey', 'restoreTabs',
+  ]) delete settings[key]
   return {
     format: 'meowshell-config',
     version: 1,
     exportedAt: new Date().toISOString(),
     containsSecrets: false,
     settings,
-    connections: normalized.connections.map((connection) => {
-      const clean = Object.assign({}, connection)
-      delete clean.password
-      delete clean.passphrase
-      delete clean.keyPath
-      return clean
-    }),
+    connections: normalized.connections.map((connection) => ({
+      name: connection.name,
+      host: connection.host,
+      port: connection.port,
+      username: connection.username,
+      authMode: connection.authMode,
+      tunnels: connection.tunnels,
+    })),
   }
 }
 
@@ -335,7 +417,8 @@ function importedConfig(value) {
     host: String(connection.host || '').trim().slice(0, 253),
     port: validPort(connection.port, 22),
     username: String(connection.username || '').trim().slice(0, 128),
-    keyPath: String(connection.keyPath || '').trim().slice(0, 4096),
+    authMode: connection.authMode === 'key' ? 'key' : 'password',
+    keyPath: '',
     tunnels: Array.isArray(connection.tunnels) ? connection.tunnels.slice(0, 100) : [],
     password: '',
     passphrase: '',
@@ -350,6 +433,10 @@ function encSecret(v) {
   if (!v) return ''
   try {
     if (safeStorage.isEncryptionAvailable()) {
+      if (process.platform === 'linux' && typeof safeStorage.getSelectedStorageBackend === 'function' &&
+          safeStorage.getSelectedStorageBackend() === 'basic_text') {
+        throw new Error('системное хранилище Linux использует небезопасный backend basic_text')
+      }
       return 'enc:' + safeStorage.encryptString(String(v)).toString('base64')
     }
   } catch (err) {
@@ -383,6 +470,8 @@ function cfgView(cfg) {
   return {
     settings: Object.assign({}, cfg.settings || {}, safeMode ? { webglRenderer: false } : {}),
     safeMode,
+    smokeTest: ciSmokeTest,
+    platform: process.platform,
     backgroundResourceUrl,
     securityWarning: (cfg.connections || []).some((c) =>
       [c.password, c.passphrase].some((value) => typeof value === 'string' && value && !value.startsWith('enc:'))
@@ -411,20 +500,7 @@ function resolveSshConfig(input) {
   const source = input && typeof input === 'object' ? input : {}
   const id = typeof source.id === 'string' ? source.id : ''
   const saved = id ? loadConfig().connections.find((item) => item.id === id) : null
-  const pick = (key, fallback = '') => Object.prototype.hasOwnProperty.call(source, key)
-    ? source[key]
-    : (saved && saved[key]) || fallback
-  return {
-    id,
-    host: pick('host'),
-    port: validPort(pick('port', 22), 22),
-    username: pick('username'),
-    keyPath: pick('keyPath'),
-    password: source.password || decSecret(saved && saved.password),
-    passphrase: source.passphrase || decSecret(saved && saved.passphrase),
-    cols: Math.min(1000, Math.max(2, Number(source.cols) || 80)),
-    rows: Math.min(500, Math.max(1, Number(source.rows) || 24)),
-  }
+  return resolveSshConnection(source, saved, decSecret)
 }
 
 function send(channel, payload) {
@@ -594,8 +670,14 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  for (const client of pendingSshClients.values()) {
+    try { client.destroy() } catch {}
+  }
+  pendingSshClients.clear()
   for (const [id, s] of sessions) {
     try { s.kill() } catch {}
+    try { closeTunnelsFor(id) } catch {}
+    try { stopMonitor(id) } catch {}
     cleanupTemporaryMedia(id)
   }
   app.quit()
@@ -642,7 +724,7 @@ handleIpc('session:create-local', (e, opts = {}) => {
   p.onExit(({ exitCode }) => {
     sessions.delete(id)
     cleanupTemporaryMedia(id)
-    send('session:exit', { id, code: exitCode })
+    send('session:exit', { id, code: exitCode, reason: 'exit' })
   })
   sessions.set(id, {
     type: 'local',
@@ -664,9 +746,12 @@ function verifyHostKey(host, port, fingerprint, callback) {
   const known = loadConfig().knownHosts[key]
   if (known === fingerprint) return callback(true)
   const changed = !!known
+  const displayFingerprint = (value) => /^[0-9a-f]{64}$/i.test(String(value || ''))
+    ? 'SHA256:' + Buffer.from(value, 'hex').toString('base64').replace(/=+$/, '')
+    : String(value || '')
   const detail = changed
-    ? mt('The server key changed. This may mean the server was reinstalled or a man-in-the-middle attack is in progress.\n\nSaved: ', 'Ключ сервера изменился. Это может означать переустановку сервера или атаку посредника.\n\nСохранённый: ') + known + mt('\nNew: ', '\nНовый: ') + fingerprint
-    : mt('This server is not yet known to MeowShell. Verify the fingerprint with the server administrator.\n\nSHA-256: ', 'Сервер ещё не известен MeowShell. Сверь fingerprint с администратором сервера.\n\nSHA-256: ') + fingerprint
+    ? mt('The server key changed. This may mean the server was reinstalled or a man-in-the-middle attack is in progress.\n\nSaved: ', 'Ключ сервера изменился. Это может означать переустановку сервера или атаку посредника.\n\nСохранённый: ') + displayFingerprint(known) + mt('\nNew: ', '\nНовый: ') + displayFingerprint(fingerprint)
+    : mt('This server is not yet known to MeowShell. Verify the fingerprint with the server administrator.\n\n', 'Сервер ещё не известен MeowShell. Сверь fingerprint с администратором сервера.\n\n') + displayFingerprint(fingerprint)
   dialog.showMessageBox(win, {
     type: changed ? 'warning' : 'question',
     title: changed ? mt('SSH: server key changed', 'SSH: ключ сервера изменился') : mt('SSH: new server', 'SSH: новый сервер'),
@@ -689,13 +774,25 @@ handleIpc('session:create-ssh', async (e, cfg = {}) => {
   const id = String(nextId++)
   return await new Promise((resolve) => {
     const client = new Client()
+    pendingSshClients.set(id, client)
     let settled = false
-    const done = (result) => { if (!settled) { settled = true; resolve(result) } }
+    let shellTimer = null
+    const done = (result) => {
+      if (settled) return false
+      settled = true
+      if (shellTimer) clearTimeout(shellTimer)
+      pendingSshClients.delete(id)
+      if (result && result.error) {
+        try { client.destroy() } catch {}
+      }
+      resolve(result)
+      return true
+    }
 
     const host = String(cfg.host || '').trim()
     const username = String(cfg.username || '').trim()
     const port = validPort(cfg.port, 22)
-    if (!host || !username) return done({ error: 'Укажи хост и пользователя' })
+    if (!validSshEndpoint(host, username)) return done({ error: 'Некорректный SSH-адрес или пользователь' })
     const connOpts = {
       host,
       port,
@@ -707,6 +804,8 @@ handleIpc('session:create-ssh', async (e, cfg = {}) => {
     }
     if (cfg.keyPath) {
       try {
+        const keyStat = fs.lstatSync(cfg.keyPath)
+        if (!keyStat.isFile() || keyStat.size > 16 * 1024 * 1024) throw new Error('файл ключа недопустим или слишком большой')
         connOpts.privateKey = fs.readFileSync(cfg.keyPath)
       } catch (err) {
         return done({ error: 'Не удалось прочитать ключ: ' + err.message })
@@ -716,9 +815,14 @@ handleIpc('session:create-ssh', async (e, cfg = {}) => {
     if (cfg.password) connOpts.password = cfg.password
 
     client.on('ready', () => {
+      shellTimer = setTimeout(() => done({ error: 'SSH-сервер не открыл терминал за 15 секунд' }), 15000)
       client.shell(
         { term: 'xterm-256color', cols: cfg.cols || 80, rows: cfg.rows || 24 },
         (err, stream) => {
+          if (settled) {
+            try { stream && stream.close() } catch {}
+            return
+          }
           if (err) {
             client.end()
             return done({ error: err.message })
@@ -730,12 +834,23 @@ handleIpc('session:create-ssh', async (e, cfg = {}) => {
           const decErr = new StringDecoder('utf8')
           stream.on('data', (d) => send('session:data', { id, data: dec.write(d) }))
           stream.stderr.on('data', (d) => send('session:data', { id, data: decErr.write(d) }))
+          let exitCode = null
+          let exitSignal = null
+          stream.on('exit', (code, signal) => {
+            if (Number.isInteger(code)) exitCode = code
+            if (signal) exitSignal = String(signal)
+          })
           stream.on('close', () => {
             sessions.delete(id)
             try { closeTunnelsFor(id) } catch {}
             try { stopMonitor(id) } catch {}
             try { client.end() } catch {}
-            send('session:exit', { id, code: 0 })
+            send('session:exit', {
+              id,
+              code: exitCode,
+              signal: exitSignal,
+              reason: exitCode !== null || exitSignal ? 'exit' : 'disconnect',
+            })
           })
           sessions.set(id, {
             type: 'ssh',
@@ -752,6 +867,8 @@ handleIpc('session:create-ssh', async (e, cfg = {}) => {
       )
     })
     client.on('error', (err) => done({ error: err.message }))
+    client.on('end', () => done({ error: 'SSH-сервер закрыл соединение до открытия терминала' }))
+    client.on('close', () => done({ error: 'SSH-соединение закрыто до открытия терминала' }))
     try {
       client.connect(connOpts)
     } catch (err) {
@@ -801,12 +918,7 @@ onIpc('session:kill', (e, { id }) => {
 function getSftp(id) {
   const s = sessions.get(id)
   if (!s || s.type !== 'ssh') return Promise.reject(new Error('SFTP доступен только для SSH-вкладок'))
-  if (!s.sftpPromise) {
-    s.sftpPromise = new Promise((res, rej) =>
-      s.client.sftp((err, sftp) => (err ? rej(err) : res(sftp)))
-    )
-  }
-  return s.sftpPromise
+  return getRetryableSftp(s)
 }
 
 function remotePath(value) {
@@ -817,12 +929,8 @@ handleIpc('sftp:list', async (e, { id, path: dir }) => {
   try {
     const sftp = await getSftp(id)
     // превращаем путь в абсолютный (чтобы кнопка «вверх» доходила до корня /)
-    const abs = await new Promise((res, rej) =>
-      sftp.realpath(remotePath(dir || '.'), (err, p) => (err ? rej(err) : res(remotePath(p))))
-    )
-    const list = await new Promise((res, rej) =>
-      sftp.readdir(abs, (err, l) => (err ? rej(err) : res(l)))
-    )
+    const abs = remotePath(await callSftp(sftp, 'realpath', remotePath(dir || '.')))
+    const list = await readDirectoryLimited(sftp, abs)
     const entries = []
     for (const x of list.slice(0, 10000)) {
       try {
@@ -835,7 +943,7 @@ handleIpc('sftp:list', async (e, { id, path: dir }) => {
       } catch {}
     }
     entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-    return { entries, path: abs, truncated: list.length > 10000 }
+    return { entries, path: abs, truncated: false }
   } catch (err) {
     return { error: err.message }
   }
@@ -847,7 +955,7 @@ handleIpc('sftp:download', async (e, { id, remotePath, name }) => {
     const res = await dialog.showSaveDialog(win, { defaultPath: safeEntryName(name) })
     if (res.canceled || !res.filePath) return { canceled: true }
     const source = normalizeRemotePath(remotePath)
-    await new Promise((r, j) => sftp.fastGet(source, res.filePath, (err) => (err ? j(err) : r())))
+    await fastGetAtomic(sftp, source, path.resolve(res.filePath))
     return { ok: true, localPath: res.filePath }
   } catch (err) {
     return { error: err.message }
@@ -861,12 +969,16 @@ async function sftpWalkDownload(sftp, remoteDir, localDir, state = { files: 0, e
     throw new Error('Скачивание через локальную символическую ссылку запрещено')
   }
   fs.mkdirSync(localDir, { recursive: true })
-  const list = await new Promise((r, j) => sftp.readdir(remoteDir, (err, l) => (err ? j(err) : r(l))))
+  const list = await readDirectoryLimited(sftp, remoteDir)
   let count = 0
+  const names = new Set()
   for (const it of list) {
     state.entries++
     if (state.entries > 100000) throw new Error('В каталоге слишком много элементов для одной операции')
     const name = safeEntryName(it.filename)
+    const collisionKey = process.platform === 'win32' ? name.toLocaleLowerCase('en-US') : name
+    if (names.has(collisionKey)) throw new Error('Удалённый каталог содержит конфликтующие имена: ' + name)
+    names.add(collisionKey)
     const rp = path.posix.join(remoteDir, safeRemoteEntryName(it.filename))
     const lp = resolveLocalChild(localDir, name)
     if (fs.existsSync(lp) && fs.lstatSync(lp).isSymbolicLink()) {
@@ -878,7 +990,7 @@ async function sftpWalkDownload(sftp, remoteDir, localDir, state = { files: 0, e
     else {
       state.files++
       if (state.files > 100000) throw new Error('В каталоге слишком много файлов для одной операции')
-      await new Promise((r, j) => sftp.fastGet(rp, lp, (err) => (err ? j(err) : r())))
+      await fastGetAtomic(sftp, rp, lp)
       count++
     }
   }
@@ -923,7 +1035,23 @@ handleIpc('sftp:upload', async (e, { id, remoteDir }) => {
     if (res.canceled || !res.filePaths.length) return { canceled: true }
     const local = res.filePaths[0]
     const remote = path.posix.join(normalizeRemotePath(remoteDir || '.'), safeRemoteEntryName(path.basename(local)))
-    await new Promise((r, j) => sftp.fastPut(local, remote, (err) => (err ? j(err) : r())))
+    const existing = await lstatMaybe(sftp, remote)
+    if (existing) {
+      if (typeof existing.isDirectory === 'function' && existing.isDirectory()) throw new Error('По этому пути уже существует каталог')
+      const answer = await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: mt('Replace remote file?', 'Заменить удалённый файл?'),
+        message: path.posix.basename(remote),
+        detail: mt('The existing file will be replaced atomically.', 'Существующий файл будет заменён атомарно.'),
+        buttons: [mt('Cancel', 'Отмена'), mt('Replace', 'Заменить')],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      })
+      if (answer.response !== 1) return { canceled: true }
+    }
+    const localMode = fs.statSync(local).mode & 0o777
+    await fastPutAtomic(sftp, local, remote, { overwrite: !!existing, mode: localMode })
     return { ok: true, remote }
   } catch (err) {
     return { error: err.message }
@@ -974,14 +1102,25 @@ handleIpc('sftp:upload-grants', async (e, { id, remoteDir, grants }) => {
       if (!stat.isFile()) throw new Error('Загрузка папок перетаскиванием пока не поддерживается')
       const name = safeRemoteEntryName(path.basename(local))
       const remote = path.posix.join(normalizeRemotePath(remoteDir || '.'), name)
-      await new Promise((r, j) =>
-        sftp.fastPut(
-          local,
-          remote,
-          { step: (done, chunk, total) => send('sftp:progress', { id, name, done, total }) },
-          (err) => (err ? j(err) : r())
-        )
-      )
+      const existing = await lstatMaybe(sftp, remote)
+      if (existing) {
+        if (typeof existing.isDirectory === 'function' && existing.isDirectory()) throw new Error('По пути «' + name + '» уже существует каталог')
+        const answer = await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: mt('Replace remote file?', 'Заменить удалённый файл?'),
+          message: name,
+          buttons: [mt('Skip', 'Пропустить'), mt('Replace', 'Заменить')],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        })
+        if (answer.response !== 1) continue
+      }
+      await fastPutAtomic(sftp, local, remote, {
+        overwrite: !!existing,
+        mode: stat.mode & 0o777,
+        fastPut: { step: (done, chunk, total) => send('sftp:progress', { id, name, done, total }) },
+      })
       send('sftp:progress', { id, name, done: 1, total: 1 })
       remotes.push(remote)
     }
@@ -1035,14 +1174,13 @@ handleIpc('session:paste-media', async (e, { id }) => {
 
     // SSH: отдельная закрытая папка в домашнем каталоге и случайное имя.
     const sftp = await getSftp(id)
-    const home = await new Promise((r, j) => sftp.realpath('.', (err, p) => (err ? j(err) : r(p))))
+    const home = await callSftp(sftp, 'realpath', '.')
     const cache = home.replace(/\/+$/, '') + '/.meowshell'
-    await new Promise((r) => sftp.mkdir(cache, { mode: 0o700 }, () => r()))
-    await new Promise((r) => sftp.chmod(cache, 0o700, () => r()))
+    await ensurePrivateDirectory(sftp, cache)
     const ext = path.extname(localPath).replace(/[^a-zA-Z0-9.]/g, '').slice(0, 12)
     const remote = cache + '/paste-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex') + ext
     try {
-      await new Promise((r, j) => sftp.fastPut(localPath, remote, (err) => (err ? j(err) : r())))
+      await fastPutAtomic(sftp, localPath, remote, { mode: 0o600 })
     } finally {
       if (temporaryDirectory) removeTemporaryMediaDirectory(temporaryDirectory)
       temporaryDirectory = null
@@ -1069,7 +1207,7 @@ handleIpc('config:export', async () => {
       filters: [{ name: 'JSON', extensions: ['json'] }],
     })
     if (result.canceled || !result.filePath) return { canceled: true }
-    fs.writeFileSync(result.filePath, JSON.stringify(exportableConfig(loadConfig()), null, 2), { mode: 0o600 })
+    replaceLocalFile(result.filePath, JSON.stringify(exportableConfig(loadConfig()), null, 2), 0o600)
     return { ok: true, path: result.filePath }
   } catch (err) {
     return { error: err.message }
@@ -1085,8 +1223,8 @@ handleIpc('config:import-preview', async () => {
       properties: ['openFile'],
     })
     if (result.canceled || !result.filePaths.length) return { canceled: true }
-    const stat = fs.statSync(result.filePaths[0])
-    if (!stat.isFile() || stat.size > 5 * 1024 * 1024) throw new Error('Configuration file is too large')
+    const stat = fs.lstatSync(result.filePaths[0])
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 5 * 1024 * 1024) throw new Error('Configuration file is invalid or too large')
     const imported = importedConfig(JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8')))
     const token = crypto.randomBytes(24).toString('hex')
     pendingConfigImports.set(token, { imported, expiresAt: Date.now() + 5 * 60 * 1000 })
@@ -1251,8 +1389,14 @@ onIpc('app:restart', () => {
   app.exit(0)
 })
 
-onIpc('app:smoke-ready', () => {
-  if (ciSmokeTest) setTimeout(() => app.exit(0), 500)
+onIpc('app:smoke-ready', (e, result) => {
+  if (!ciSmokeTest) return
+  if (!result || result.ok !== true) {
+    logLine('[smoke] FAIL: ' + String(result && result.error || 'unknown renderer failure'))
+    return app.exit(1)
+  }
+  logLine('[smoke] PASS: renderer initialized and local PTY completed input/output/resize')
+  setTimeout(() => app.exit(0), 250)
 })
 
 handleIpc('config:save-connection', (e, conn) => {
@@ -1260,29 +1404,40 @@ handleIpc('config:save-connection', (e, conn) => {
     if (!conn || typeof conn !== 'object') return { error: 'Некорректные данные подключения' }
     const cfg = loadConfig()
     const current = conn.id ? cfg.connections.find((item) => item.id === conn.id) : null
-    const clean = {
-      id: typeof conn.id === 'string' ? conn.id : undefined,
-      name: String(conn.name || '').trim().slice(0, 200),
-      host: String(conn.host || '').trim().slice(0, 253),
-      port: validPort(conn.port, 22),
-      username: String(conn.username || '').trim().slice(0, 128),
-      keyPath: String(conn.keyPath || '').trim(),
-      tunnels: Array.isArray(conn.tunnels) ? conn.tunnels.slice(0, 100) : (current && current.tunnels) || [],
-      password: current ? current.password || '' : '',
-      passphrase: current ? current.passphrase || '' : '',
+    const requestedKeyPath = Object.prototype.hasOwnProperty.call(conn, 'keyPath')
+      ? conn.keyPath
+      : (current && current.keyPath) || ''
+    const authMode = conn.authMode === 'key' || (conn.authMode == null && String(requestedKeyPath || '').trim())
+      ? 'key'
+      : 'password'
+    const generatedId = typeof conn.id === 'string' && conn.id
+      ? conn.id
+      : Date.now().toString(36) + crypto.randomBytes(3).toString('hex')
+    const clean = sanitizeConnection({
+      id: generatedId,
+      name: conn.name,
+      host: conn.host,
+      port: conn.port,
+      username: conn.username,
+      authMode,
+      keyPath: authMode === 'key' ? requestedKeyPath : '',
+      tunnels: Array.isArray(conn.tunnels) ? conn.tunnels : (current && current.tunnels) || [],
+      password: '',
+      passphrase: '',
+    })
+    if (!clean) return { error: 'Укажи корректные хост и имя пользователя' }
+    const sameEndpoint = !!current && current.host === clean.host && current.port === clean.port && current.username === clean.username
+    if (authMode === 'password') {
+      if (typeof conn.password === 'string' && conn.password) clean.password = encSecret(conn.password)
+      else if (!conn.clearPassword && sameEndpoint && current.authMode === 'password') clean.password = current.password || ''
+    } else {
+      if (typeof conn.passphrase === 'string' && conn.passphrase) clean.passphrase = encSecret(conn.passphrase)
+      else if (!conn.clearPassphrase && sameEndpoint && current.authMode === 'key') clean.passphrase = current.passphrase || ''
     }
-    if (!clean.host || !clean.username) return { error: 'Укажи хост и пользователя' }
-    if (conn.clearPassword) clean.password = ''
-    else if (typeof conn.password === 'string' && conn.password) clean.password = encSecret(conn.password)
-    if (conn.clearPassphrase) clean.passphrase = ''
-    else if (typeof conn.passphrase === 'string' && conn.passphrase) clean.passphrase = encSecret(conn.passphrase)
     if (clean.id) {
       const i = cfg.connections.findIndex((c) => c.id === clean.id)
       if (i >= 0) cfg.connections[i] = clean
       else cfg.connections.push(clean)
-    } else {
-      clean.id = Date.now().toString(36) + crypto.randomBytes(3).toString('hex')
-      cfg.connections.push(clean)
     }
     if (!saveConfig(cfg)) return { error: 'Не удалось сохранить конфигурацию' }
     return cfgView(cfg)
@@ -1296,6 +1451,10 @@ handleIpc('config:delete-connection', (e, connId) => {
   cfg.connections = (cfg.connections || []).filter((c) => c.id !== String(connId || ''))
   if (!saveConfig(cfg)) return { error: 'Не удалось сохранить конфигурацию' }
   return cfgView(cfg)
+})
+
+handleIpc('ssh:format-command', (e, connection) => {
+  try { return { command: formatSshCommand(connection) } } catch (err) { return { error: err.message } }
 })
 
 // Импорт SSH-профилей из Tabby (config.yaml). Пароли Tabby хранит в системном
@@ -1315,9 +1474,12 @@ handleIpc('config:import-tabby', async () => {
       properties: ['openFile'],
     })
     if (res.canceled || !res.filePaths.length) return { canceled: true }
-    const stat = fs.statSync(res.filePaths[0])
-    if (stat.size > 5 * 1024 * 1024) return { error: 'Файл конфигурации слишком большой' }
-    const doc = yaml.load(fs.readFileSync(res.filePaths[0], 'utf8'))
+    const stat = fs.lstatSync(res.filePaths[0])
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 5 * 1024 * 1024) return { error: 'Файл конфигурации недопустим или слишком большой' }
+    const doc = yaml.load(fs.readFileSync(res.filePaths[0], 'utf8'), {
+      schema: yaml.JSON_SCHEMA,
+      json: true,
+    })
     const profiles = Array.isArray(doc && doc.profiles) ? doc.profiles.slice(0, 10000) : []
     const cfg = loadConfig()
     cfg.connections = cfg.connections || []
@@ -1334,16 +1496,19 @@ handleIpc('config:import-tabby', async () => {
       if (Array.isArray(p.options.privateKeys) && p.options.privateKeys[0]) {
         keyPath = String(p.options.privateKeys[0]).replace(/^file:\/\//, '')
       }
-      cfg.connections.push({
+      const imported = sanitizeConnection({
         id: Date.now().toString(36) + crypto.randomBytes(3).toString('hex'),
         name: String(p.name || user + '@' + p.options.host).trim().slice(0, 200),
         host: String(p.options.host).trim().slice(0, 253),
         port,
         username: String(user).trim().slice(0, 128),
+        authMode: keyPath ? 'key' : 'password',
         keyPath: keyPath.slice(0, 4096),
         password: '',
         passphrase: '',
       })
+      if (!imported) continue
+      cfg.connections.push(imported)
       added++
     }
     if (!saveConfig(cfg)) return { error: 'Не удалось сохранить импортированные подключения' }
@@ -1389,16 +1554,17 @@ async function sftpRmrf(sftp, target, state = { entries: 0 }, depth = 0) {
   if (depth > 64) throw new Error('Слишком глубокая структура каталогов')
   state.entries++
   if (state.entries > 100000) throw new Error('Слишком много файлов для одной операции')
-  const st = await new Promise((res, rej) => sftp.lstat(target, (err, s) => (err ? rej(err) : res(s))))
+  const st = await callSftp(sftp, 'lstat', target)
   if (st.isDirectory()) {
-    const list = await new Promise((res, rej) => sftp.readdir(target, (err, l) => (err ? rej(err) : res(l))))
+    const remaining = Math.max(1, 100000 - state.entries)
+    const list = await readDirectoryLimited(sftp, target, { maxEntries: remaining })
     for (const item of list) {
       const name = safeRemoteEntryName(item && item.filename)
       await sftpRmrf(sftp, path.posix.join(target, name), state, depth + 1)
     }
-    await new Promise((res, rej) => sftp.rmdir(target, (err) => (err ? rej(err) : res())))
+    await callSftp(sftp, 'rmdir', target)
   } else {
-    await new Promise((res, rej) => sftp.unlink(target, (err) => (err ? rej(err) : res())))
+    await callSftp(sftp, 'unlink', target)
   }
 }
 
@@ -1409,7 +1575,8 @@ handleIpc('sftp:rename', async (e, { id, from, to }) => {
     safeRemoteEntryName(path.posix.basename(to))
     if (path.posix.dirname(from) !== path.posix.dirname(to)) throw new Error('Переименование не может перемещать файл в другой каталог')
     const sftp = await getSftp(id)
-    await new Promise((res, rej) => sftp.rename(from, to, (err) => (err ? rej(err) : res())))
+    if (await lstatMaybe(sftp, to)) throw new Error('Файл с таким именем уже существует')
+    await callSftp(sftp, 'rename', from, to)
     return { ok: true }
   } catch (err) {
     return { error: err.message }
@@ -1421,7 +1588,7 @@ handleIpc('sftp:chmod', async (e, { id, path: p, mode }) => {
     if (!/^[0-7]{3,4}$/.test(String(mode))) return { error: 'Неверный режим chmod' }
     p = normalizeRemotePath(p)
     const sftp = await getSftp(id)
-    await new Promise((res, rej) => sftp.chmod(p, parseInt(String(mode), 8), (err) => (err ? rej(err) : res())))
+    await callSftp(sftp, 'chmod', p, parseInt(String(mode), 8))
     return { ok: true }
   } catch (err) {
     return { error: err.message }
@@ -1444,23 +1611,39 @@ handleIpc('sftp:read-file', async (e, { id, path: p }) => {
   try {
     p = normalizeRemotePath(p)
     const sftp = await getSftp(id)
-    const st = await new Promise((res, rej) => sftp.stat(p, (err, s) => (err ? rej(err) : res(s))))
-    if (st.size > 2 * 1024 * 1024) return { error: 'Файл слишком большой для редактора (макс. 2 МБ)' }
-    const buf = await new Promise((res, rej) => sftp.readFile(p, (err, b) => (err ? rej(err) : res(b))))
-    return { content: buf.toString('utf8') }
+    const result = await readFileLimited(sftp, p, MAX_EDITOR_BYTES)
+    let content
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(result.buffer)
+    } catch {
+      return { error: 'Файл не является корректным UTF-8 текстом; редактирование отменено, чтобы не повредить данные' }
+    }
+    if (content.includes('\0')) return { error: 'Файл похож на бинарный; встроенный редактор его не изменяет' }
+    return { content, version: result.version }
   } catch (err) {
     return { error: err.message }
   }
 })
 
-handleIpc('sftp:write-file', async (e, { id, path: p, content }) => {
+handleIpc('sftp:write-file', async (e, { id, path: p, content, version }) => {
   try {
     p = normalizeRemotePath(p)
     content = String(content == null ? '' : content)
-    if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) return { error: 'Файл слишком большой для редактора (макс. 2 МБ)' }
+    if (Buffer.byteLength(content, 'utf8') > MAX_EDITOR_BYTES) return { error: 'Файл слишком большой для редактора (макс. 2 МБ)' }
+    if (typeof version !== 'string' || !/^\d+:\d+:[0-9a-f]{64}$/.test(version)) return { error: 'Версия файла устарела; открой файл заново' }
     const sftp = await getSftp(id)
-    await new Promise((res, rej) => sftp.writeFile(p, content, 'utf8', (err) => (err ? rej(err) : res())))
-    return { ok: true }
+    const current = await readFileLimited(sftp, p, MAX_EDITOR_BYTES)
+    if (current.version !== version) {
+      return { error: 'Удалённый файл изменился после открытия. Перезагрузите его перед сохранением.' }
+    }
+    const encoded = Buffer.from(content, 'utf8')
+    const nextStatVersion = await atomicRemoteWrite(
+      sftp,
+      p,
+      (temporary) => callSftp(sftp, 'writeFile', temporary, encoded),
+      { expectedVersion: fileVersion(current.attrs) }
+    )
+    return { ok: true, version: nextStatVersion + ':' + crypto.createHash('sha256').update(encoded).digest('hex') }
   } catch (err) {
     return { error: err.message }
   }
@@ -1528,6 +1711,14 @@ app.on('will-quit', () => { try { globalShortcut.unregisterAll() } catch {} })
 // --- SSH-туннели (локальный порт → адрес, видимый с сервера) ---
 const tunnels = new Map() // ключ: sessId:localPort
 
+function closeTunnel(tunnel) {
+  if (!tunnel || tunnel.closed) return
+  tunnel.closed = true
+  destroyResources(tunnel.connections)
+  if (tunnel.connections) tunnel.connections.clear()
+  try { tunnel.server && tunnel.server.close() } catch {}
+}
+
 handleIpc('tunnel:start', (e, { id, localPort, remoteHost, remotePort }) => {
   const s = sessions.get(id)
   if (!s || s.type !== 'ssh' || !s.client) return { error: 'нет активной SSH-сессии' }
@@ -1535,30 +1726,50 @@ handleIpc('tunnel:start', (e, { id, localPort, remoteHost, remotePort }) => {
   const rp = validPort(remotePort)
   if (!lp || !rp) return { error: 'неверный порт' }
   remoteHost = String(remoteHost || '127.0.0.1').trim()
-  if (!remoteHost || remoteHost.length > 253 || remoteHost.includes('\0')) return { error: 'неверный адрес назначения' }
+  if (!validSshEndpoint(remoteHost, 'tunnel')) return { error: 'неверный адрес назначения' }
   const key = id + ':' + lp
   if (tunnels.has(key)) return { error: 'порт ' + lp + ' уже проброшен' }
   return new Promise((resolve) => {
     let resolved = false
+    const tunnel = { server: null, sessId: id, connections: new Set(), closed: false }
     const server = netV9.createServer((socket) => {
+      if (tunnel.closed || tunnels.get(key) !== tunnel) return socket.destroy()
+      tunnel.connections.add(socket)
+      socket.once('close', () => tunnel.connections.delete(socket))
       s.client.forwardOut('127.0.0.1', socket.remotePort || 0, remoteHost || '127.0.0.1', rp, (err, stream) => {
         if (err) { try { socket.destroy() } catch {} ; return }
+        if (tunnel.closed || tunnels.get(key) !== tunnel) {
+          try { stream.destroy() } catch {}
+          try { socket.destroy() } catch {}
+          return
+        }
+        tunnel.connections.add(stream)
+        stream.once('close', () => tunnel.connections.delete(stream))
         socket.pipe(stream).pipe(socket)
         stream.on('error', () => { try { socket.destroy() } catch {} })
-        socket.on('error', () => { try { stream.end() } catch {} })
+        socket.on('error', () => { try { stream.destroy() } catch {} })
       })
     })
+    tunnel.server = server
     server.on('error', (err) => {
       tunnels.delete(key)
+      closeTunnel(tunnel)
       if (!resolved) {
         resolved = true
         resolve({ error: err.code === 'EADDRINUSE' ? 'порт ' + lp + ' уже занят на этом компьютере' : err.message })
       }
     })
-    server.listen(lp, '127.0.0.1', () => {
-      if (!resolved) { resolved = true; resolve({ ok: true }) }
-    })
-    tunnels.set(key, { server, sessId: id })
+    tunnels.set(key, tunnel)
+    try {
+      server.listen(lp, '127.0.0.1', () => {
+        if (!resolved) { resolved = true; resolve({ ok: true }) }
+      })
+    } catch (err) {
+      tunnels.delete(key)
+      closeTunnel(tunnel)
+      resolved = true
+      resolve({ error: err.message })
+    }
   })
 })
 
@@ -1566,7 +1777,7 @@ handleIpc('tunnel:stop', (e, { id, localPort }) => {
   const key = id + ':' + parseInt(localPort, 10)
   const t = tunnels.get(key)
   if (t) {
-    try { t.server.close() } catch {}
+    closeTunnel(t)
     tunnels.delete(key)
   }
   return { ok: true }
@@ -1575,7 +1786,7 @@ handleIpc('tunnel:stop', (e, { id, localPort }) => {
 function closeTunnelsFor(id) {
   for (const [k, t] of [...tunnels]) {
     if (t.sessId === id) {
-      try { t.server.close() } catch {}
+      closeTunnel(t)
       tunnels.delete(k)
     }
   }
@@ -1586,7 +1797,14 @@ const monitors = new Map()
 
 function stopMonitor(id) {
   const m = monitors.get(id)
-  if (m) { clearInterval(m.timer); monitors.delete(id) }
+  if (m) {
+    clearInterval(m.timer)
+    if (m.state && m.state.stream) {
+      try { m.state.stream.destroy() } catch {}
+    }
+    if (m.state && m.state.timeout) clearTimeout(m.state.timeout)
+    monitors.delete(id)
+  }
 }
 
 onIpc('monitor:stop', (e, { id }) => stopMonitor(id))
@@ -1596,6 +1814,8 @@ onIpc('monitor:start', (e, { id, interval }) => {
   if (!s || s.type !== 'ssh' || !s.client) return
   stopMonitor(id)
   const state = {}
+  const monitor = { timer: null, state }
+  monitors.set(id, monitor)
   const cmd = "cat /proc/stat 2>/dev/null | head -1; echo @@; free -b 2>/dev/null | grep -i '^mem'; echo @@; df -B1 -P / 2>/dev/null | tail -1; echo @@; cat /proc/uptime 2>/dev/null"
   const tick = () => {
     if (!sessions.has(id)) return stopMonitor(id)
@@ -1604,12 +1824,45 @@ onIpc('monitor:start', (e, { id, interval }) => {
     try {
       s.client.exec(cmd, (err, stream) => {
         if (err) { state.busy = false; return }
-        let out = ''
-        stream.on('data', (d) => { out += d.toString('utf8') })
-        stream.stderr.on('data', () => {})
-        stream.on('error', () => { state.busy = false })
-        stream.on('close', () => {
+        if (monitors.get(id) !== monitor) {
+          try { stream.destroy() } catch {}
           state.busy = false
+          return
+        }
+        let out = ''
+        let received = 0
+        let failed = false
+        let finished = false
+        state.stream = stream
+        const finish = () => {
+          if (finished) return false
+          finished = true
+          if (state.timeout) clearTimeout(state.timeout)
+          state.timeout = null
+          if (state.stream === stream) state.stream = null
+          state.busy = false
+          return true
+        }
+        const receive = (d, keep) => {
+          received += d.length
+          if (received > 256 * 1024) {
+            failed = true
+            try { stream.destroy() } catch {}
+            finish()
+            return
+          }
+          if (keep) out += d.toString('utf8')
+        }
+        stream.on('data', (d) => receive(d, true))
+        stream.stderr.on('data', (d) => receive(d, false))
+        stream.on('error', () => finish())
+        state.timeout = setTimeout(() => {
+          failed = true
+          try { stream.destroy() } catch {}
+          finish()
+        }, 10000)
+        stream.on('close', () => {
+          if (!finish() || failed || monitors.get(id) !== monitor) return
           const p = out.split('@@').map((x) => x.trim())
           const res = { id }
           const cpu = (p[0] || '').split(/\s+/).slice(1).map(Number)
@@ -1636,14 +1889,43 @@ onIpc('monitor:start', (e, { id, interval }) => {
   }
   tick()
   const delay = Math.min(60000, Math.max(2000, Number(interval) || 3000))
-  monitors.set(id, { timer: setInterval(tick, delay) })
+  monitor.timer = setInterval(tick, delay)
 })
 
 // --- генерация SSH-ключей и установка на сервер ---
+async function restrictPrivateKeyPermissions(file) {
+  if (process.platform !== 'win32') {
+    fs.chmodSync(file, 0o600)
+    return
+  }
+  const script = [
+    '$p=$env:MEOWSHELL_PRIVATE_KEY_PATH',
+    'if ([string]::IsNullOrWhiteSpace($p)) { throw "Missing private-key path" }',
+    '$identity=[System.Security.Principal.WindowsIdentity]::GetCurrent()',
+    '$acl=New-Object System.Security.AccessControl.FileSecurity',
+    '$acl.SetOwner($identity.User)',
+    '$acl.SetAccessRuleProtection($true,$false)',
+    '$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($identity.User,"FullControl","Allow")',
+    '$acl.AddAccessRule($rule)',
+    'Set-Acl -LiteralPath $p -AclObject $acl',
+  ].join(';')
+  const encodedScript = Buffer.from(script, 'utf16le').toString('base64')
+  await new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedScript],
+      {
+        windowsHide: true,
+        timeout: 15000,
+        env: Object.assign({}, process.env, { MEOWSHELL_PRIVATE_KEY_PATH: path.resolve(file) }),
+      },
+      (err) => (err ? reject(new Error('Не удалось ограничить ACL приватного ключа: ' + err.message)) : resolve())
+    )
+  })
+}
+
 handleIpc('ssh:keygen', async (e, { type, comment, passphrase }) => {
   let utils
   try { utils = require('ssh2').utils } catch (err) { return { error: err.message } }
-  if (!utils || typeof utils.generateKeyPairSync !== 'function') return { error: 'эта версия ssh2 не умеет генерировать ключи' }
+  if (!utils || typeof utils.generateKeyPair !== 'function') return { error: 'эта версия ssh2 не умеет генерировать ключи' }
   const kt = type === 'rsa' ? 'rsa' : 'ed25519'
   const opts = { comment: String(comment || 'meowshell').replace(/[\r\n]/g, ' ').slice(0, 200) }
   if (kt === 'rsa') opts.bits = 4096
@@ -1651,14 +1933,45 @@ handleIpc('ssh:keygen', async (e, { type, comment, passphrase }) => {
   if (passphrase.length > 4096) return { error: 'пароль ключа слишком длинный' }
   if (passphrase) { opts.passphrase = passphrase; opts.cipher = 'aes256-cbc' }
   let pair
-  try { pair = utils.generateKeyPairSync(kt, opts) } catch (err) { return { error: err.message } }
+  try {
+    pair = await new Promise((resolve, reject) =>
+      utils.generateKeyPair(kt, opts, (err, keys) => (err ? reject(err) : resolve(keys)))
+    )
+  } catch (err) { return { error: err.message } }
   const def = path.join(os.homedir(), '.ssh', 'id_' + kt)
   const r = await dialog.showSaveDialog(win, { title: mt('Save the private key', 'Куда сохранить приватный ключ'), defaultPath: def })
   if (r.canceled || !r.filePath) return { canceled: true }
   try {
     fs.mkdirSync(path.dirname(r.filePath), { recursive: true })
-    fs.writeFileSync(r.filePath, pair.private, { mode: 0o600 })
-    fs.writeFileSync(r.filePath + '.pub', pair.public)
+    if (fs.existsSync(r.filePath + '.pub')) throw new Error('Публичный файл уже существует: ' + r.filePath + '.pub')
+    const privateTmp = r.filePath + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex')
+    const publicTmp = r.filePath + '.pub.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex')
+    const privateBackup = r.filePath + '.backup-' + crypto.randomBytes(4).toString('hex')
+    let hadPrivate = false
+    let privateInstalled = false
+    let publicInstalled = false
+    try {
+      fs.writeFileSync(privateTmp, pair.private, { mode: 0o600, flag: 'wx' })
+      fs.writeFileSync(publicTmp, pair.public, { mode: 0o644, flag: 'wx' })
+      if (fs.existsSync(r.filePath)) {
+        fs.renameSync(r.filePath, privateBackup)
+        hadPrivate = true
+      }
+      fs.renameSync(privateTmp, r.filePath)
+      privateInstalled = true
+      fs.renameSync(publicTmp, r.filePath + '.pub')
+      publicInstalled = true
+      await restrictPrivateKeyPermissions(r.filePath)
+      if (hadPrivate) fs.unlinkSync(privateBackup)
+    } catch (err) {
+      if (publicInstalled) { try { fs.unlinkSync(r.filePath + '.pub') } catch {} }
+      if (privateInstalled) { try { fs.unlinkSync(r.filePath) } catch {} }
+      if (hadPrivate) { try { fs.renameSync(privateBackup, r.filePath) } catch {} }
+      throw err
+    } finally {
+      try { fs.unlinkSync(privateTmp) } catch {}
+      try { fs.unlinkSync(publicTmp) } catch {}
+    }
   } catch (err) { return { error: err.message } }
   return { privatePath: r.filePath, publicPath: r.filePath + '.pub', publicKey: pair.public }
 })
@@ -1673,11 +1986,31 @@ handleIpc('ssh:install-key', (e, { id, pubPath, publicKey }) => {
   if (pk.length > 16384 || /[\r\n]/.test(pk)) return { error: 'публичный ключ должен занимать одну строку' }
   if (!/^(ssh-(rsa|ed25519)|ecdsa-)/.test(pk)) return { error: 'файл не похож на публичный ключ (*.pub)' }
   return new Promise((resolve) => {
-    s.client.exec('mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys', (err, stream) => {
-      if (err) return resolve({ error: err.message })
+    let settled = false
+    let timer = null
+    const done = (result) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    const command = 'umask 077; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && touch "$HOME/.ssh/authorized_keys" && chmod 600 "$HOME/.ssh/authorized_keys" && IFS= read -r key && (grep -qxF -- "$key" "$HOME/.ssh/authorized_keys" || printf \'%s\\n\' "$key" >> "$HOME/.ssh/authorized_keys")'
+    s.client.exec(command, (err, stream) => {
+      if (err) return done({ error: err.message })
       let errOut = ''
-      stream.stderr.on('data', (d) => { errOut += d })
-      stream.on('close', (code) => resolve(code === 0 ? { ok: true } : { error: errOut.trim() || ('код ' + code) }))
+      stream.stderr.on('data', (d) => {
+        if (Buffer.byteLength(errOut, 'utf8') < 64 * 1024) errOut += d.toString('utf8').slice(0, 64 * 1024)
+        if (Buffer.byteLength(errOut, 'utf8') >= 64 * 1024) {
+          try { stream.destroy() } catch {}
+          done({ error: 'Сервер вернул слишком большой ответ при установке ключа' })
+        }
+      })
+      stream.on('error', (streamError) => done({ error: streamError.message }))
+      stream.on('close', (code) => done(code === 0 ? { ok: true } : { error: errOut.trim() || ('код ' + code) }))
+      timer = setTimeout(() => {
+        try { stream.destroy() } catch {}
+        done({ error: 'Установка ключа не завершилась за 15 секунд' })
+      }, 15000)
       stream.end(pk + '\n')
     })
   })

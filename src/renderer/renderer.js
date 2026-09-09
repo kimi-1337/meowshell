@@ -98,9 +98,13 @@ const tabs = new Map() // id -> { id, type, title, term, fit, tabEl, paneEl, sft
 const paneOf = new Map() // sessionId -> { tab, slot: 'main' | 'split' }
 let activeId = null
 let focusedSessId = null
+let lastSshSessionId = null
 let editingConnId = null
 let toastTimer = null
 let rendererSafeMode = false
+let rendererSmokeTest = false
+let rendererPlatform = ''
+let settingsSaveQueue = Promise.resolve()
 
 // ---------- утилиты ----------
 
@@ -111,6 +115,24 @@ function toast(msg, isError) {
   el.classList.remove('hidden')
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => el.classList.add('hidden'), 4000)
+}
+
+async function saveSettingsChecked(options = {}) {
+  let payload
+  try { payload = JSON.parse(JSON.stringify(settings)) } catch (err) {
+    if (!options.silent) toast('Не удалось подготовить настройки к сохранению: ' + err.message, true)
+    return false
+  }
+  const operation = settingsSaveQueue.catch(() => null).then(() => window.api.saveSettings(payload))
+  settingsSaveQueue = operation
+  try {
+    const result = await operation
+    if (!result || result.error) throw new Error(result && result.error || 'пустой ответ приложения')
+    return true
+  } catch (err) {
+    if (!options.silent) toast('Настройки не сохранены: ' + (err && err.message ? err.message : err), true)
+    return false
+  }
 }
 
 function fmtSize(n) {
@@ -143,6 +165,7 @@ function updateEmptyState() {
 
 // Создаёт терминал в ячейке (основной или сплит)
 function makeTerm(sessId, tab, slot, cellEl) {
+  const binding = { id: sessId }
   cellEl.dataset.sessionId = sessId
   const th = THEMES[settings.theme] || THEMES.dark
   const term = new Terminal({
@@ -182,7 +205,7 @@ function makeTerm(sessId, tab, slot, cellEl) {
     } catch {}
   }
   term.onData((data) => {
-    routeInput(sessId, data)
+    routeInput(binding.id, data)
     animateTerminalText(term, 'input', data.length)
     typingFx(term)
   })
@@ -234,8 +257,8 @@ function makeTerm(sessId, tab, slot, cellEl) {
         const appMode = term.modes && term.modes.applicationCursorKeysMode
         const up = mode === 'one' ? (appMode ? '\x1bOA' : '\x1b[A') : '\x1b[5~'
         const down = mode === 'one' ? (appMode ? '\x1bOB' : '\x1b[B') : '\x1b[6~'
-        while (altWheelAcc <= -step) { routeInput(sessId, up); altWheelAcc += step }
-        while (altWheelAcc >= step) { routeInput(sessId, down); altWheelAcc -= step }
+        while (altWheelAcc <= -step) { routeInput(binding.id, up); altWheelAcc += step }
+        while (altWheelAcc >= step) { routeInput(binding.id, down); altWheelAcc -= step }
         ev.preventDefault()
         return false
       } catch { return true }
@@ -246,12 +269,12 @@ function makeTerm(sessId, tab, slot, cellEl) {
   // отслеживаем фокус — куда вставлять и где искать
   if (term.textarea) {
     term.textarea.addEventListener('focus', () => {
-      focusedSessId = sessId
+      focusedSessId = binding.id
       tab.activeSlot = slot
     })
   }
   paneOf.set(sessId, { tab, slot })
-  return { term, fit, search }
+  return { term, fit, search, binding }
 }
 
 function addTab(id, title, type, sshCfg) {
@@ -315,6 +338,7 @@ function addTab(id, title, type, sshCfg) {
   tab.term = made.term
   tab.fit = made.fit
   tab.search = made.search
+  tab.binding = made.binding
 
   tabs.set(id, tab)
   activateTab(id)
@@ -325,6 +349,7 @@ function addTab(id, title, type, sshCfg) {
 function activateTab(id) {
   const tab = tabs.get(id)
   if (!tab) return
+  if (tab.type === 'ssh') lastSshSessionId = id
   activeId = id
   for (const t of tabs.values()) {
     const isActive = t.id === id
@@ -405,7 +430,9 @@ async function splitTab(dir) {
   if (tab.type === 'ssh') {
     if (!tab.sshCfg) return toast('Для сплита SSH-вкладки переподключись к серверу', true)
     toast('Открываю вторую SSH-сессию…')
-    res = await window.api.createSsh(Object.assign({}, tab.sshCfg, { cols: tab.term.cols, rows: tab.term.rows }))
+    const splitCfg = Object.assign({}, tab.sshCfg, { cols: tab.term.cols, rows: tab.term.rows })
+    if (splitCfg.id) splitCfg.useSavedCredentials = true
+    res = await window.api.createSsh(splitCfg)
   } else {
     res = await window.api.createLocal({ shell: settings.shell, cols: 80, rows: 24 })
   }
@@ -420,7 +447,7 @@ async function splitTab(dir) {
   attachDividerDrag(tab, divider)
   tab.paneEl.classList.add('split', tab.splitDir === 'h' ? 'split-h' : 'split-v')
   const made = makeTerm(res.id, tab, 'split', cellEl)
-  tab.split = { id: res.id, term: made.term, fit: made.fit, search: made.search, cellEl }
+  tab.split = { id: res.id, term: made.term, fit: made.fit, search: made.search, binding: made.binding, cellEl }
   toast('Экран разделён — тяни полоску между панелями, чтобы менять размер. Повторный клик закроет сплит')
   requestAnimationFrame(() => {
     fitTab(tab)
@@ -447,10 +474,13 @@ async function newLocalTab() {
 // на паузу, пока xterm не дорисует очередь. Без этого ввод ждёт в хвосте очереди
 // и появляются пролаги 0.1-0.5с в TUI-приложениях (Claude Code и т.п.)
 const flowState = new Map()
+const smokeDataWaiters = new Map()
 const FLOW_HIGH = 400000 // байт в очереди — ставим паузу
 const FLOW_LOW = 80000   // очередь рассосалась — продолжаем
 
 window.api.onData(({ id, data }) => {
+  const smokeWaiter = smokeDataWaiters.get(id)
+  if (smokeWaiter) smokeWaiter(data)
   const p = paneOf.get(id)
   if (!p) return
   const term = p.slot === 'split' ? (p.tab.split && p.tab.split.term) : p.tab.term
@@ -472,7 +502,7 @@ window.api.onData(({ id, data }) => {
   })
 })
 
-window.api.onExit(({ id }) => {
+window.api.onExit(({ id, reason }) => {
   flowState.delete(id)
   const p = paneOf.get(id)
   if (!p) return
@@ -484,7 +514,8 @@ window.api.onExit(({ id }) => {
     return
   }
   const tb = p.tab
-  if (tb.type === 'ssh' && tb.sshCfg && !tb.closing && settings.autoReconnect !== false) {
+  if (tb.split) closeSplit(tb, true)
+  if (tb.type === 'ssh' && reason === 'disconnect' && tb.sshCfg && !tb.closing && settings.autoReconnect !== false) {
     reconnectTab(tb)
     return
   }
@@ -499,7 +530,7 @@ function openSshModal(prefill) {
   $('#ssh-host').value = (prefill && prefill.host) || ''
   $('#ssh-port').value = (prefill && prefill.port) || '22'
   $('#ssh-user').value = (prefill && prefill.username) || ''
-  $('#ssh-auth').value = (prefill && prefill.keyPath) ? 'key' : 'password'
+  $('#ssh-auth').value = prefill && prefill.authMode === 'key' ? 'key' : 'password'
   $('#ssh-password').value = (prefill && prefill.password) || ''
   $('#ssh-keypath').value = (prefill && prefill.keyPath) || ''
   $('#ssh-passphrase').value = (prefill && prefill.passphrase) || ''
@@ -526,6 +557,8 @@ async function sshConnectFromModal() {
     host: $('#ssh-host').value.trim(),
     port: Number($('#ssh-port').value) || 22,
     username: $('#ssh-user').value.trim(),
+    authMode: $('#ssh-auth').value === 'key' ? 'key' : 'password',
+    useSavedCredentials: !!editingConnId,
   }
   if (!cfg.host || !cfg.username) return toast('Укажи хост и пользователя', true)
   const useKey = $('#ssh-auth').value === 'key'
@@ -545,6 +578,7 @@ async function sshConnectFromModal() {
   btn.textContent = 'Подключиться'
   if (res.error) return toast('SSH: ' + res.error, true)
 
+  let reconnectProfile = null
   if ($('#ssh-save').checked) {
     const saved = {
       id: editingConnId || undefined,
@@ -552,6 +586,7 @@ async function sshConnectFromModal() {
       host: cfg.host,
       port: cfg.port,
       username: cfg.username,
+      authMode: cfg.authMode,
       keyPath: cfg.keyPath || '',
       clearPassphrase: !$('#ssh-savepass').checked || !useKey,
       clearPassword: !$('#ssh-savepass').checked || useKey,
@@ -565,13 +600,13 @@ async function sshConnectFromModal() {
     }
     connections = cfgAll.connections || []
     renderConnections()
+    reconnectProfile = editingConnId ? connections.find((item) => item.id === editingConnId) : connections.find((item) =>
+      item.host === cfg.host && item.username === cfg.username && Number(item.port || 22) === Number(cfg.port || 22)
+    )
   }
 
   $('#modal-ssh').classList.add('hidden')
-  const stored = editingConnId ? connections.find((item) => item.id === editingConnId) : connections.find((item) =>
-    item.host === cfg.host && item.username === cfg.username && Number(item.port || 22) === Number(cfg.port || 22)
-  )
-  addTab(res.id, cfg.name || res.title, 'ssh', stored || cfg)
+  addTab(res.id, cfg.name || res.title, 'ssh', reconnectProfile || cfg)
 }
 
 // ---------- сохранённые подключения ----------
@@ -624,7 +659,7 @@ function renderConnections() {
 
 async function connectSaved(conn) {
   // если нет сохранённого пароля/ключа — открываем форму, чтобы ввести пароль
-  if (!conn.hasPassword && !conn.keyPath) {
+  if ((conn.authMode === 'key' && !conn.keyPath) || (conn.authMode !== 'key' && !conn.hasPassword)) {
     openSshModal(conn)
     $('#ssh-save').checked = true
     $('#ssh-savepass').checked = true
@@ -632,7 +667,15 @@ async function connectSaved(conn) {
     return
   }
   toast('Подключение к ' + conn.name + '…')
-  const res = await window.api.createSsh(conn)
+  const res = await window.api.createSsh({
+    id: conn.id,
+    host: conn.host,
+    port: conn.port,
+    username: conn.username,
+    authMode: conn.authMode === 'key' ? 'key' : 'password',
+    keyPath: conn.authMode === 'key' ? conn.keyPath : '',
+    useSavedCredentials: true,
+  })
   if (res.error) {
     toast('SSH: ' + res.error, true)
     return openSshModal(conn)
@@ -842,7 +885,7 @@ window.addEventListener(
     } else if (e.ctrlKey && !e.shiftKey && e.code === 'KeyF') {
       e.preventDefault()
       toggleSearch(true)
-    } else if (e.ctrlKey && !e.shiftKey && e.code === 'KeyV' && e.target.closest && e.target.closest('.term-pane')) {
+    } else if (e.ctrlKey && !e.shiftKey && e.code === 'KeyV' && e.target.closest && e.target.closest('.xterm')) {
       e.preventDefault()
       handlePaste()
     } else if (e.key === 'Escape') {
@@ -866,6 +909,9 @@ ro.observe($('#terms'))
 
 async function init() {
   const cfg = await window.api.getConfig()
+  rendererSmokeTest = cfg.smokeTest === true
+  rendererPlatform = cfg.platform || ''
+  if (rendererSmokeTest && cfg.configNotice) throw new Error(cfg.configNotice)
   connections = cfg.connections || []
   settings = Object.assign({}, settings, cfg.settings || {})
   backgroundResourceUrl = cfg.backgroundResourceUrl || ''
@@ -881,7 +927,8 @@ async function init() {
   else if (rendererSafeMode) setTimeout(() => toast('Безопасный режим: GPU-рендеринг отключён после прошлого сбоя'), cfg.configNotice ? 4300 : 0)
 }
 
-const initPromise = init().catch((err) => {
+const initPromise = init()
+initPromise.catch((err) => {
   toast('Не удалось загрузить конфигурацию: ' + (err && err.message ? err.message : err), true)
 })
 
@@ -898,8 +945,11 @@ function renderSnippets() {
     b.addEventListener('click', () => runSnippet(s))
     b.addEventListener('contextmenu', async (e) => {
       e.preventDefault()
-      settings.snippets.splice(i, 1)
-      await window.api.saveSettings(settings)
+      const removed = settings.snippets.splice(i, 1)[0]
+      if (!await saveSettingsChecked()) {
+        settings.snippets.splice(i, 0, removed)
+        return
+      }
       renderSnippets()
       toast('Команда удалена')
     })
@@ -927,7 +977,10 @@ $('#snip-save').addEventListener('click', async () => {
   if (!name || !cmd) return toast('Заполни название и команду', true)
   settings.snippets = settings.snippets || []
   settings.snippets.push({ name, cmd, enter: $('#snip-enter').checked })
-  await window.api.saveSettings(settings)
+  if (!await saveSettingsChecked()) {
+    settings.snippets.pop()
+    return
+  }
   renderSnippets()
   $('#modal-snippet').classList.add('hidden')
   toast('Команда добавлена')
@@ -958,20 +1011,21 @@ sftpPanel.addEventListener('drop', async (e) => {
 })
 
 const progressRows = new Map()
-window.api.onSftpProgress(({ name, done, total }) => {
+window.api.onSftpProgress(({ id, name, done, total }) => {
   const el = $('#sftp-progress')
-  let row = progressRows.get(name)
+  const key = String(id) + ':' + String(name)
+  let row = progressRows.get(key)
   if (!row) {
     row = document.createElement('div')
     row.className = 'sftp-prog'
     row.innerHTML = '<span class="sftp-prog-name"></span><div class="sftp-prog-bar"><div class="sftp-prog-fill"></div></div>'
     row.querySelector('.sftp-prog-name').textContent = name
     el.appendChild(row)
-    progressRows.set(name, row)
+    progressRows.set(key, row)
   }
   const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0
   row.querySelector('.sftp-prog-fill').style.width = pct + '%'
-  if (pct >= 100) setTimeout(() => { row.remove(); progressRows.delete(name) }, 800)
+  if (pct >= 100) setTimeout(() => { row.remove(); progressRows.delete(key) }, 800)
 })
 
 $('#sftp-mkdir').addEventListener('click', () => {
@@ -1072,7 +1126,12 @@ function connMenuItems(conn) {
     { label: '<i class=ic-sliders></i> Настроить сервер', onClick: () => openSshEditor(conn) },
     { label: '<i class=ic-copy></i> Копировать IP', onClick: () => { copyText(conn.host); toast('IP скопирован: ' + conn.host) } },
     { label: '<i class=ic-copy></i> Копировать user@host', onClick: () => { copyText(conn.username + '@' + conn.host); toast('Скопировано: ' + conn.username + '@' + conn.host) } },
-    { label: '<i class=ic-terminal></i> Копировать команду ssh', onClick: () => { copyText('ssh ' + conn.username + '@' + conn.host + (Number(conn.port) !== 22 ? ' -p ' + conn.port : '')); toast('Команда скопирована') } },
+    { label: '<i class=ic-terminal></i> Копировать команду ssh', onClick: async () => {
+      const result = await window.api.formatSshCommand(conn)
+      if (result.error) return toast(result.error, true)
+      copyText(result.command)
+      toast('Команда скопирована')
+    } },
     '-',
     { label: '<i class=ic-trash></i> Удалить из списка', danger: true, onClick: async () => {
       const cfgAll = await window.api.deleteConnection(conn.id)
@@ -1110,6 +1169,7 @@ sshSaveOnlyBtn.addEventListener('click', async () => {
     host,
     port: Number($('#ssh-port').value) || 22,
     username,
+    authMode: useKey ? 'key' : 'password',
     keyPath: useKey ? $('#ssh-keypath').value.trim() : '',
     clearPassphrase: !useKey || !$('#ssh-savepass').checked,
     clearPassword: useKey || !$('#ssh-savepass').checked,
@@ -1279,7 +1339,9 @@ async function reconnectTab(tab) {
     if (tab.closing) break
     setTabDot(tab, 'connecting')
     tab.term.write('\r\n\x1b[33m[' + uiText('connection lost — reconnecting ', 'обрыв соединения — переподключение ') + i + '/' + maxTries + '…]\x1b[0m\r\n')
-    const res = await window.api.createSsh(Object.assign({}, tab.sshCfg, tab.term ? { cols: tab.term.cols, rows: tab.term.rows } : {}))
+    const reconnectCfg = Object.assign({}, tab.sshCfg, tab.term ? { cols: tab.term.cols, rows: tab.term.rows } : {})
+    if (reconnectCfg.id) reconnectCfg.useSavedCredentials = true
+    const res = await window.api.createSsh(reconnectCfg)
     if (tab.closing) {
       if (!res.error) window.api.kill(res.id)
       break
@@ -1294,12 +1356,14 @@ async function reconnectTab(tab) {
         if (key.startsWith(oldId + ':')) runningTunnels.delete(key)
       }
       tab.id = res.id
+      tab.binding.id = res.id
       tabs.set(res.id, tab)
       paneOf.set(res.id, { tab, slot: 'main' })
       const mainCell = tab.paneEl.querySelector('.split-cell')
       if (mainCell) mainCell.dataset.sessionId = res.id
       if (activeId === oldId) activeId = res.id
       if (focusedSessId === oldId) focusedSessId = res.id
+      if (lastSshSessionId === oldId) lastSshSessionId = res.id
       tab.reconnecting = false
       setTabDot(tab, 'ok')
       tab.term.write('\x1b[32m[' + uiText('connection restored', 'соединение восстановлено') + ']\x1b[0m\r\n')
@@ -1335,9 +1399,16 @@ function makeDialog(innerHtml) {
   bd.appendChild(m)
   document.body.appendChild(bd)
   const previousFocus = document.activeElement
+  let closed = false
+  let beforeClose = null
+  const closeListeners = []
   const close = () => {
+    if (closed || (beforeClose && beforeClose() === false)) return false
+    closed = true
     bd.remove()
     if (previousFocus && previousFocus.isConnected && previousFocus.focus) previousFocus.focus()
+    for (const listener of closeListeners) listener()
+    return true
   }
   bd.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -1363,7 +1434,13 @@ function makeDialog(innerHtml) {
     const first = m.querySelector('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')
     ;(first || m).focus()
   }, 0)
-  return { bd, m, close }
+  return {
+    bd,
+    m,
+    close,
+    onClose: (listener) => closeListeners.push(listener),
+    setBeforeClose: (listener) => { beforeClose = listener },
+  }
 }
 
 function askInput(title, initial, cb) {
@@ -1457,12 +1534,25 @@ async function openRemoteEditor(tab, entry, fullPath) {
   d.m.querySelector('h2').textContent = fullPath
   const ta = d.m.querySelector('textarea')
   ta.value = r.content
+  let savedContent = r.content
+  let version = r.version
+  let confirmedClose = false
   const btns = d.m.querySelectorAll('.modal-actions .btn')
   const save = async () => {
-    const w = await window.api.sftpWriteFile(tab.id, fullPath, ta.value)
+    const w = await window.api.sftpWriteFile(tab.id, fullPath, ta.value, version)
     if (w.error) return toast('Ошибка: ' + w.error, true)
+    version = w.version
+    savedContent = ta.value
     toast('Сохранено: ' + entry.name)
   }
+  d.setBeforeClose(() => {
+    if (confirmedClose || ta.value === savedContent) return true
+    askConfirm('Закрыть редактор и потерять несохранённые изменения?', () => {
+      confirmedClose = true
+      d.close()
+    })
+    return false
+  })
   btns[1].addEventListener('click', save)
   btns[0].addEventListener('click', () => d.close())
   ta.addEventListener('keydown', (e) => {
@@ -1608,7 +1698,7 @@ function applySettingsToTerm(tab) {
 }
 
 function applyAllSettings() {
-  window.api.saveSettings(settings)
+  void saveSettingsChecked()
   applyBodyTheme()
   for (const t of tabs.values()) applySettingsToTerm(t)
 }
@@ -2130,6 +2220,22 @@ function safePaste(id, text, term) {
   btns[2].addEventListener('click', () => { d.close(); doIt(text) })
 }
 
+// Нативный пункт «Вставить» и системные сочетания также проходят через
+// pasteGuard. Обработчик capture срабатывает раньше внутреннего textarea xterm.
+document.addEventListener('paste', (event) => {
+  const xterm = event.target && event.target.closest && event.target.closest('.xterm')
+  if (!xterm) return
+  const cell = xterm.closest('.split-cell')
+  const id = cell && cell.dataset.sessionId
+  const pane = id && paneOf.get(id)
+  if (!pane) return
+  const term = pane.slot === 'split' && pane.tab.split ? pane.tab.split.term : pane.tab.term
+  const text = event.clipboardData && event.clipboardData.getData('text/plain')
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  if (text) safePaste(id, text, term)
+}, true)
+
 // === мониторинг сервера ===
 function v9bytes(n) {
   if (!isFinite(n) || n < 0) return '?'
@@ -2192,8 +2298,13 @@ async function startTunnel(tabId, t, silent) {
 }
 
 async function stopTunnelRow(tabId, t) {
-  await window.api.tunnelStop({ id: tabId, localPort: +t.localPort })
+  const result = await window.api.tunnelStop({ id: tabId, localPort: +t.localPort })
+  if (result && result.error) {
+    toast('Туннель: ' + result.error, true)
+    return false
+  }
   runningTunnels.delete(tunKey(tabId, t))
+  return true
 }
 
 function openTunnels() {
@@ -2208,7 +2319,21 @@ function openTunnels() {
     '<div class="tun-form"><input id="tun-lp" type="number" placeholder="Лок. порт"><span>→</span><input id="tun-rh" type="text" placeholder="127.0.0.1"><input id="tun-rp" type="number" placeholder="Порт сервера"><label><input id="tun-auto" type="checkbox"> авто</label><button class="btn primary" id="tun-add">Добавить</button></div>' +
     '<div class="set-hint">Пример: 5432 → 127.0.0.1 : 5432 — база на сервере станет доступна как localhost:5432. «Авто» — запускать при подключении.</div>' +
     '<div class="modal-actions"><button class="btn ghost" id="tun-close">Закрыть</button></div>')
-  const save = () => { if (conn) window.api.saveConnection(conn) }
+  const save = async () => {
+    if (!conn) return true
+    const result = await window.api.saveConnection(conn)
+    if (!result || result.error) {
+      toast('Туннели не сохранены: ' + (result && result.error || 'пустой ответ приложения'), true)
+      return false
+    }
+    connections = result.connections || connections
+    const persisted = connections.find((item) => item.id === conn.id)
+    if (persisted) {
+      store.tunnels = persisted.tunnels || []
+      tab.sshCfg = persisted
+    }
+    return true
+  }
   const render = () => {
     const list = d.m.querySelector('#tun-list')
     list.innerHTML = ''
@@ -2225,26 +2350,36 @@ function openTunnels() {
         '<span class="spacer"></span><button class="btn small tun-toggle">' + (on ? 'Стоп' : 'Запустить') + '</button><button class="btn small tun-del" title="Удалить"><i class=ic-x></i></button>'
       row.querySelector('.tun-desc').textContent = 'localhost:' + t.localPort + ' → ' + (t.remoteHost || '127.0.0.1') + ':' + t.remotePort
       row.querySelector('.tun-toggle').addEventListener('click', async () => {
-        if (on) await stopTunnelRow(tab.id, t)
-        else await startTunnel(tab.id, t)
+        if (on) {
+          if (!await stopTunnelRow(tab.id, t)) return
+        } else if (!await startTunnel(tab.id, t)) return
         render()
       })
       row.querySelector('.tun-del').addEventListener('click', async () => {
-        if (on) await stopTunnelRow(tab.id, t)
-        store.tunnels.splice(i, 1)
-        save()
+        if (on && !await stopTunnelRow(tab.id, t)) return
+        const removed = store.tunnels.splice(i, 1)[0]
+        if (!await save()) {
+          store.tunnels.splice(i, 0, removed)
+          return
+        }
         render()
       })
       list.appendChild(row)
     })
   }
-  d.m.querySelector('#tun-add').addEventListener('click', () => {
+  d.m.querySelector('#tun-add').addEventListener('click', async () => {
     const lp = +d.m.querySelector('#tun-lp').value
     const rp = +d.m.querySelector('#tun-rp').value
     const rh = d.m.querySelector('#tun-rh').value.trim() || '127.0.0.1'
-    if (!lp || !rp) return toast('Укажи оба порта', true)
+    if (!Number.isInteger(lp) || lp < 1 || lp > 65535 || !Number.isInteger(rp) || rp < 1 || rp > 65535) {
+      return toast('Укажи корректные порты от 1 до 65535', true)
+    }
+    if (!/^[\p{L}\p{N}._:+-]+$/u.test(rh) || rh.startsWith('-')) return toast('Укажи корректный адрес назначения', true)
     store.tunnels.push({ localPort: lp, remoteHost: rh, remotePort: rp, auto: d.m.querySelector('#tun-auto').checked })
-    save()
+    if (!await save()) {
+      store.tunnels.pop()
+      return
+    }
     render()
   })
   d.m.querySelector('#tun-close').addEventListener('click', () => d.close())
@@ -2281,7 +2416,9 @@ function keygenDialog() {
 }
 
 async function installKeyOnServer() {
-  const tab = tabs.get(activeId)
+  const tab = tabs.get(activeId) && tabs.get(activeId).type === 'ssh'
+    ? tabs.get(activeId)
+    : tabs.get(lastSshSessionId)
   if (!tab || tab.type !== 'ssh') return toast('Открой SSH-вкладку нужного сервера', true)
   toast('Выбери публичный ключ (файл .pub)')
   const p = await window.api.pickFile()
@@ -2378,7 +2515,7 @@ function openThemeEditor(key) {
     settings.customThemes[k] = { label, ui, xterm: xt }
     mergeCustomThemes()
     settings.theme = k
-    await window.api.saveSettings(settings)
+    if (!await saveSettingsChecked()) return
     applyAllSettings()
     refreshThemeSelect()
     renderCustomThemesList()
@@ -2399,7 +2536,7 @@ function renderCustomThemesList() {
     row.querySelector('.ct-name').textContent = v.label + (settings.theme === k ? ' · активна' : '')
     row.querySelector('.ct-apply').addEventListener('click', async () => {
       settings.theme = k
-      await window.api.saveSettings(settings)
+      if (!await saveSettingsChecked()) return
       applyAllSettings()
       refreshThemeSelect()
       renderCustomThemesList()
@@ -2409,7 +2546,7 @@ function renderCustomThemesList() {
       delete settings.customThemes[k]
       delete THEMES[k]
       if (settings.theme === k) settings.theme = 'dark'
-      await window.api.saveSettings(settings)
+      if (!await saveSettingsChecked()) return
       applyAllSettings()
       refreshThemeSelect()
       renderCustomThemesList()
@@ -2478,13 +2615,14 @@ function injectV9Settings(pane) {
   q('#st-quake-dock').checked = settings.quakeDock !== false
   q('#st-quake-h').value = settings.quakeHeight || 50
   q('#st-quake-h-val').textContent = (settings.quakeHeight || 50) + '%'
-  q('#st-restore').checked = settings.restoreTabs !== false
+  q('#st-restore').checked = settings.restoreTabs === true
   q('#st-bcast').value = settings.broadcastScope || 'splits'
   q('#st-pasteguard').checked = settings.pasteGuard !== false
   q('#st-mon-int').value = String(settings.monitorInterval || 3)
   const save = async () => {
-    await window.api.saveSettings(settings)
+    if (!await saveSettingsChecked()) return false
     applyAllSettings()
+    return true
   }
   q('#st-quake').addEventListener('change', () => { settings.quakeEnabled = q('#st-quake').checked; save() })
   q('#st-quake-key').addEventListener('change', () => { settings.quakeHotkey = q('#st-quake-key').value; save() })
@@ -2552,7 +2690,7 @@ function snapshotTabs() {
     else if (t.type !== 'settings') list.push({ type: 'local' })
   }
   settings.lastTabs = list
-  window.api.saveSettings(settings)
+  void saveSettingsChecked()
 }
 
 const __v9AddTab = addTab
@@ -2582,19 +2720,50 @@ closeTab = function (id, killSession) {
 // === старт: темы, quake, восстановление ===
 function showOnboarding() {
   return new Promise((resolve) => {
+    let action = null
     const d = makeDialog('<h2>Первый запуск</h2><p>Выбери, с чего начать</p><div class="onboarding-actions"><button class="btn primary" data-action="local">Открыть локальный терминал</button><button class="btn" data-action="ssh">Добавить SSH-сервер</button><button class="btn" data-action="tabby">Импортировать из Tabby</button></div><div class="modal-actions"><button class="btn ghost" data-action="later">Не сейчас</button></div>')
-    d.m.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
+    d.onClose(() => resolve(action))
+    d.m.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', async () => {
       settings.onboardingComplete = true
-      window.api.saveSettings(settings)
-      const action = button.dataset.action
+      if (!await saveSettingsChecked()) return
+      action = button.dataset.action
       d.close()
-      resolve(action)
     }))
   })
 }
 
-;(async () => {
+async function runCiSmoke() {
+  const created = await window.api.createLocal({ shell: '', cols: 80, rows: 24 })
+  if (!created || created.error) throw new Error(created && created.error || 'локальный PTY не создан')
+  addTab(created.id, created.title || 'smoke', 'local')
+  const nonce = 'MEOWSHELL_SMOKE_' + Math.random().toString(36).slice(2)
+  const output = new Promise((resolve, reject) => {
+    let received = ''
+    const timer = setTimeout(() => {
+      smokeDataWaiters.delete(created.id)
+      reject(new Error('PTY не вернул контрольную строку за 10 секунд'))
+    }, 10000)
+    smokeDataWaiters.set(created.id, (data) => {
+      received = (received + String(data)).slice(-65536)
+      if (!received.includes(nonce)) return
+      clearTimeout(timer)
+      smokeDataWaiters.delete(created.id)
+      resolve()
+    })
+  })
+  window.api.resize(created.id, 91, 27)
+  window.api.write(created.id, 'echo ' + nonce + (rendererPlatform === 'win32' ? '\r' : '\n'))
+  await output
+  closeTab(created.id, true)
+}
+
+const startupPromise = (async () => {
   await initPromise
+  if (rendererSmokeTest) {
+    await runCiSmoke()
+    window.api.smokeReady({ ok: true })
+    return
+  }
   mergeCustomThemes()
   if (THEMES[settings.theme] && THEMES[settings.theme].custom) applyAllSettings()
   try { window.api.quakeRefresh(quakeSettings()) } catch {}
@@ -2610,7 +2779,7 @@ function showOnboarding() {
     } else if (imported && imported.error) toast('Импорт: ' + imported.error, true)
   }
   const list = (settings.lastTabs || []).slice()
-  if (!onboardingAction && settings.restoreTabs !== false && list.length) {
+  if (!onboardingAction && settings.restoreTabs === true && list.length) {
     __restoring = true
     for (const it of list) {
       try {
@@ -2628,6 +2797,10 @@ function showOnboarding() {
   __snapshotReady = true
   snapshotTabs()
 })()
+startupPromise.catch((err) => {
+  toast('Ошибка запуска: ' + (err && err.message ? err.message : err), true)
+  if (rendererSmokeTest) window.api.smokeReady({ ok: false, error: err && err.message ? err.message : String(err) })
+})
 
 // ==================== v1.0: библиотека команд, свои шрифты ====================
 
@@ -2679,7 +2852,7 @@ function openSnippetLibrary() {
         btn.innerHTML = '<i class=ic-plus></i>'
         btn.addEventListener('click', async function () {
           add(p)
-          await window.api.saveSettings(settings)
+          if (!await saveSettingsChecked()) return
           renderSnippets()
           render()
         })
@@ -2691,7 +2864,7 @@ function openSnippetLibrary() {
   d.m.querySelector('#lib-close').addEventListener('click', d.close)
   d.m.querySelector('#lib-all').addEventListener('click', async function () {
     PRESET_SNIPPETS.forEach(function (p) { if (!has(p)) add(p) })
-    await window.api.saveSettings(settings)
+    if (!await saveSettingsChecked()) return
     renderSnippets()
     render()
     toast('Все команды добавлены на панель')
@@ -2745,7 +2918,7 @@ function injectV10Settings(pane) {
   u.value = settings.uiFont || ''
   u.addEventListener('change', function () {
     settings.uiFont = u.value || ''
-    window.api.saveSettings(settings)
+    void saveSettingsChecked()
     applyAllSettings()
   })
   var tsel = pane.querySelector('#st-termfont')
@@ -2754,7 +2927,7 @@ function injectV10Settings(pane) {
     settings.fontFamily = '"' + tsel.value + '", Consolas, "Courier New", monospace'
     var inp = pane.querySelector('#st-fontfamily')
     if (inp) inp.value = settings.fontFamily
-    window.api.saveSettings(settings)
+    void saveSettingsChecked()
     applyAllSettings()
     toast('Шрифт терминала: ' + tsel.value)
   })
@@ -2778,8 +2951,6 @@ paletteItems = function () {
     applyUiFont()
   }, 200)
 })()
-
-initPromise.then(() => window.api.smokeReady()).catch(() => {})
 
 // ==================== v1.1: ripple, слайдеры, предпросмотр шрифтов ====================
 ;(function () {
@@ -2998,7 +3169,7 @@ buildSettingsPane = function (pane) {
         var acc = v201AccFromEvent(e)
         if (!acc) return
         settings.quakeHotkey = acc
-        window.api.saveSettings(settings)
+        void saveSettingsChecked()
         try { applyAllSettings() } catch (er) {}
         inp.blur()
         toast('Хоткей quake-режима: ' + v201HotkeyLabel(acc))

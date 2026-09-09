@@ -1,4 +1,27 @@
-# MeowShell 2.3.0 Beta
+<p align="center">
+  <img src="assets/logo.png" width="150" alt="Логотип MeowShell">
+</p>
+
+<h1 align="center">MeowShell</h1>
+
+<p align="center">
+  Приватный Windows-терминал для локальных shell, SSH, SFTP и спокойной удалённой работы.
+</p>
+
+<p align="center">
+  <a href="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml/badge.svg"></a>
+  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4"><img alt="Релиз 2.3.0 beta 4" src="https://img.shields.io/badge/release-2.3.0--beta.4-f59e0b"></a>
+  <a href="LICENSE"><img alt="GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-2ea44f"></a>
+</p>
+
+<p align="center">
+  <a href="#скачать">Скачать</a> ·
+  <a href="#возможности">Возможности</a> ·
+  <a href="#разработка-и-сборка">Разработка</a> ·
+  <a href="SECURITY.md">Безопасность</a> ·
+  <a href="README.md">English</a>
+</p>
 
 > **Бета-версия.** Перед тестированием сохрани резервные копии важных данных.
 > Текущая сборка не подписана и может вызвать предупреждение Microsoft Defender
@@ -20,6 +43,10 @@
 
 [Все файлы релиза и контрольные суммы SHA-256](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.4)
 
+В ветке `main` также находятся ещё не выпущенные исправления аудита из
+[CHANGELOG.md](CHANGELOG.md); скачиваемые бинарные файлы всегда соответствуют
+исходникам своего тега.
+
 MeowShell — приватный и настраиваемый настольный терминал для Windows. Он
 объединяет локальные вкладки, SSH, SFTP, сплиты, туннели, мониторинг, темы и
 быстрые команды.
@@ -39,14 +66,14 @@ MeowShell — приватный и настраиваемый настольн�
 
 Windows x86/32-bit не выпускается: x86 и x32 — одно и то же 32-битное
 направление, а текущий набор PTY/runtime-зависимостей не даёт надёжной ia32
-сборки. Основная цель — Windows 10/11 x64. ARM64 собирается и проверяется в CI,
-но до теста на физическом устройстве остаётся экспериментальной.
+сборки. Основная цель — Windows 10/11 x64. ARM64 собирается в CI, но до
+runtime-теста на физическом устройстве остаётся экспериментальной.
 
 ## Возможности
 
 - локальные `cmd`, PowerShell или произвольный shell;
 - SSH по паролю или приватному ключу с проверкой host key;
-- SFTP: навигация, upload/download, rename, chmod, удаление и редактор текста;
+- SFTP: навигация, атомарные upload/download/редактирование, rename, chmod и защищённое удаление;
 - вертикальный и горизонтальный сплит;
 - переподключение SSH, локальные туннели и мониторинг Linux-сервера;
 - broadcast-ввод, командная палитра, поиск и защита многострочной вставки;
@@ -75,6 +102,8 @@ Windows.
 ```powershell
 npm ci
 npm run verify
+npm run audit:acceptance
+npm audit --audit-level=high
 npm start
 npm run dist
 ```

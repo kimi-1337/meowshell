@@ -407,12 +407,13 @@
 
   function applyText(node) {
     const parent = node.parentElement
-    if (parent && parent.closest('.xterm, .conn-name, .conn-host, .tab-title, .sftp-name, code, pre, textarea')) return
+    if (parent && parent.closest('.xterm, .conn-name, .conn-host, .tab-title, .sftp-name, .snippet, .sftp-prog-name, .ct-name, [data-i18n-user], code, pre, textarea')) return
     if (!originals.has(node)) originals.set(node, node.nodeValue)
     node.nodeValue = exact(originals.get(node))
   }
 
   function applyElement(element) {
+    if (element.closest && element.closest('.snippet, [data-i18n-user]')) return
     for (const name of attributes) {
       if (!element.hasAttribute(name)) continue
       const key = 'i18nOriginal' + name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())

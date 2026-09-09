@@ -12,6 +12,7 @@ const fail = (message) => failures.push(message)
 const files = [
   'src/main/main.js',
   'src/main/preload.js',
+  'src/main/sftp-utils.js',
   'src/main/utils.js',
   'src/renderer/renderer.js',
   'src/renderer/i18n.js',
@@ -53,6 +54,24 @@ if (!renderer.includes("d.m.querySelector('.confirm-text')") || !renderer.includ
 }
 if (!main.includes('isDangerousRemoteTarget(p)') || !main.includes('safeRemoteEntryName(item && item.filename)')) {
   fail('Опасные SFTP-цели и имена должны проверяться в main process')
+}
+for (const [needle, message] of [
+  ['routeInput(binding.id, data)', 'Ввод терминала должен использовать изменяемую привязку сессии'],
+  ["document.addEventListener('paste'", 'Нативная вставка должна проходить через pasteGuard'],
+  ["settings.restoreTabs === true", 'Восстановление вкладок должно быть явным opt-in'],
+  ['d.onClose(() => resolve(action))', 'Закрытие onboarding должно завершать startup promise'],
+  ['saveSettingsChecked', 'Ошибки сохранения настроек должны обрабатываться в renderer'],
+  ['runCiSmoke()', 'Smoke-проверка должна запускать локальный PTY'],
+]) {
+  if (!renderer.includes(needle)) fail(message)
+}
+for (const [needle, message] of [
+  ['readDirectoryLimited(sftp, abs)', 'SFTP listing должен иметь фактический лимит данных'],
+  ['ensurePrivateDirectory(sftp, cache)', 'Paste-media должен проверять приватность удалённого каталога'],
+  ["reason: exitCode !== null || exitSignal ? 'exit' : 'disconnect'", 'SSH exit и disconnect должны различаться'],
+  ["handleIpc('ssh:format-command'", 'SSH-команда должна форматироваться в main process'],
+]) {
+  if (!main.includes(needle)) fail(message)
 }
 const wheelHandler = renderer.match(/let altWheelAcc = 0[\s\S]*?term\.onBell/)
 if (!wheelHandler) fail('Не найден обработчик колёсика полноэкранных программ')

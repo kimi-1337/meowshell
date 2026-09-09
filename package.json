@@ -7,7 +7,7 @@
     "name": "kimi",
     "url": "https://github.com/kimi-1337"
   },
-  "description": "A private, customizable desktop terminal with tabs, SSH, SFTP, themes, and screenshot paste.",
+  "description": "A privacy-first Windows terminal with tabs, SSH, atomic SFTP, themes, and guarded paste.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kimi-1337/meowshell.git"
@@ -20,6 +20,7 @@
     "start": "electron .",
     "check": "node scripts/check.js",
     "test": "node --test",
+    "audit:acceptance": "node audit/acceptance.cjs",
     "verify": "npm run check && npm test",
     "ensure:win-pty": "node scripts/ensure-win-pty.js",
     "dist": "npm run verify && npm run ensure:win-pty && electron-builder --win zip nsis --x64 --arm64",
@@ -125,7 +126,11 @@
     "@xterm/addon-web-links": "0.11.0",
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "5.5.0",
-    "js-yaml": "4.3.1",
+    "js-yaml": "4.3.2",
     "ssh2": "1.17.0"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.8.15",
+    "fast-uri": "3.1.7"
   }
 }
