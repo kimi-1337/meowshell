@@ -402,7 +402,6 @@
       .replace(/^Скопировано:\s*/i, 'Copied: ')
       .replace(/^Загружено:\s*/i, 'Uploaded: ')
       .replace(/^Подключение к\s+/, 'Connecting to ')
-      .replace(/…$/, '…')
   }
 
   function applyText(node) {
