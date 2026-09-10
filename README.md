@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kimi-1337/meowshell/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/kimi-1337/meowshell/actions/workflows/codeql.yml/badge.svg"></a>
-  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.6"><img alt="Release 2.3.0 beta 6" src="https://img.shields.io/badge/release-2.3.0--beta.6-f59e0b"></a>
+  <a href="https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.7"><img alt="Release 2.3.0 beta 7" src="https://img.shields.io/badge/release-2.3.0--beta.7-f59e0b"></a>
   <a href="LICENSE"><img alt="GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-2ea44f"></a>
 </p>
 
@@ -30,20 +30,21 @@
 
 ## Download
 
-### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-win-x64-setup.exe)
+### [Download MeowShell for Windows x64 — installer (recommended)](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-win-x64-setup.exe)
 
 | Package | Download |
 |---|---|
-| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-win-x64-setup.exe) |
-| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-win-x64-portable.zip) |
-| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-win-arm64-setup.exe) |
-| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-win-arm64-portable.zip) |
-| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.6/MeowShell-2.3.0-beta.6-release-bundle.zip) |
+| Windows x64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-win-x64-setup.exe) |
+| Windows x64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-win-x64-portable.zip) |
+| Windows ARM64 installer | [Download `.exe`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-win-arm64-setup.exe) |
+| Windows ARM64 portable | [Download `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-win-arm64-portable.zip) |
+| Complete release bundle | [Download full `.zip`](https://github.com/kimi-1337/meowshell/releases/download/v2.3.0-beta.7/MeowShell-2.3.0-beta.7-release-bundle.zip) |
 
-[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.6)
+[View all release files and SHA-256 checksums](https://github.com/kimi-1337/meowshell/releases/tag/v2.3.0-beta.7)
 
-Release `2.3.0-beta.6` adds lifecycle and Windows taskbar fixes on top of the
-audit hardening and in-app updater. See [CHANGELOG.md](CHANGELOG.md) for details.
+Release `2.3.0-beta.7` fixes Windows close/reopen loops and adds configurable
+toolbars, draggable tabs, dedicated update settings, and a branded installer.
+See [CHANGELOG.md](CHANGELOG.md) for details.
 Downloadable binaries correspond to their tagged source.
 
 MeowShell is a privacy-first, customizable desktop terminal for Windows. It combines
@@ -58,7 +59,7 @@ See [PRIVACY.md](PRIVACY.md) for the exact policy.
 
 ## Status and compatibility
 
-- Release: `2.3.0-beta.6`
+- Release: `2.3.0-beta.7`
 - Packages: Windows x64 and Windows ARM64
 - Formats: NSIS installer and extracted portable ZIP
 - Confirmed hardware test: Windows 10 x64, NVIDIA GPU, AMD CPU
@@ -128,6 +129,15 @@ npm run dist:installer
 
 Generated files are written to `dist/`.
 
+### Windows code signing
+
+SmartScreen reputation cannot be disabled by application or installer code. To
+ship trusted builds, add an Authenticode code-signing certificate to the
+repository secrets as `WINDOWS_CSC_LINK` (base64 data or a protected certificate
+URL) and its password as `WINDOWS_CSC_KEY_PASSWORD`. The release workflow signs
+the application and installer automatically and rejects an invalid signature.
+Never commit a `.pfx`, `.p12`, or private key to the repository.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
@@ -174,7 +184,7 @@ audit/                 baseline findings and remediation acceptance checks
 
 ## Known beta limitations
 
-- Release binaries do not have a code-signing certificate yet
+- Release binaries remain unsigned until a trusted certificate is configured in repository secrets
 - Linux resource monitoring expects `/proc`, `free`, and `df`
 - SFTP drag-and-drop uploads files, not directories
 - ARM64 packages do not yet have a documented physical-device test

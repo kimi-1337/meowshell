@@ -36,6 +36,10 @@ for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
   if (!fs.existsSync(path.resolve(htmlDir, value))) fail('Не найден ресурс из index.html: ' + value)
 }
 if (!/Content-Security-Policy/.test(html)) fail('В index.html отсутствует Content-Security-Policy')
+if (/class="side-title"/.test(html)) fail('Боковая панель не должна повторять логотип и название из шапки')
+for (const item of ['broadcast', 'monitor', 'tunnels', 'split', 'sftp']) {
+  if (!html.includes('data-toolbar-item="' + item + '"')) fail('Нет настраиваемой кнопки панели: ' + item)
+}
 
 const renderer = read('src/renderer/renderer.js')
 const preload = read('src/main/preload.js')
@@ -65,6 +69,9 @@ for (const [needle, message] of [
   ['d.onClose(() => resolve(action))', 'Закрытие onboarding должно завершать startup promise'],
   ['saveSettingsChecked', 'Ошибки сохранения настроек должны обрабатываться в renderer'],
   ['runCiSmoke()', 'Smoke-проверка должна запускать локальный PTY'],
+  ['enableTabReordering(tabEl, id)', 'Вкладки терминала должны поддерживать перетаскивание'],
+  ['setupToolbarEditor(paneEl)', 'Настройки панели инструментов должны быть подключены'],
+  ["document.body.classList.toggle('snippets-hidden'", 'Панель быстрых команд должна скрываться настройкой'],
 ]) {
   if (!renderer.includes(needle)) fail(message)
 }
@@ -77,6 +84,7 @@ for (const [needle, message] of [
   ["win.on('close', () => lifecycle.begin('window close'))", 'Нативное закрытие окна должно блокировать crash-relaunch'],
   ['icon: windowIconPath', 'Окно должно явно получать иконку для панели задач'],
   ['app.setAppUserModelId(WINDOWS_APP_ID)', 'Windows AppUserModelID должен совпадать с идентификатором приложения'],
+  ['!isRendererCrash(details)', 'Штатное уничтожение renderer не должно запускать восстановление приложения'],
 ]) {
   if (!main.includes(needle)) fail(message)
 }
@@ -115,11 +123,25 @@ if (!pkg.build || !pkg.build.appId || !main.includes("const WINDOWS_APP_ID = '" 
 
 const updater = read('src/main/updater.js')
 const releaseWorkflow = read('.github/workflows/release.yml')
+for (const [file, width, height] of [
+  ['build/installer/installer-sidebar.bmp', 164, 314],
+  ['build/installer/uninstaller-sidebar.bmp', 164, 314],
+  ['build/installer/installer-header.bmp', 150, 57],
+]) {
+  const data = fs.existsSync(path.join(root, file)) ? fs.readFileSync(path.join(root, file)) : null
+  if (!data || data.length < 26 || data.toString('ascii', 0, 2) !== 'BM' ||
+      data.readInt32LE(18) !== width || Math.abs(data.readInt32LE(22)) !== height) {
+    fail(file + ': неверный BMP-ресурс установщика')
+  }
+}
 if (!pkg.dependencies || !/^\d+\.\d+\.\d+$/.test(pkg.dependencies['electron-updater'] || '')) {
   fail('electron-updater должен быть закреплён точной runtime-версией')
 }
 if (!pkg.build || !pkg.build.publish || pkg.build.publish.provider !== 'github' || !pkg.build.publish.owner || !pkg.build.publish.repo) {
   fail('Для обновлятора должен быть задан фиксированный GitHub publish provider')
+}
+for (const key of ['installerHeader', 'installerSidebar', 'uninstallerSidebar', 'installerIcon', 'uninstallerIcon']) {
+  if (!pkg.build || !pkg.build.nsis || !pkg.build.nsis[key]) fail('NSIS не использует фирменный ресурс: ' + key)
 }
 for (const name of ['dist', 'dist:zip', 'dist:installer', 'dist:ci:x64']) {
   if (!pkg.scripts[name] || !pkg.scripts[name].includes('--publish never')) {

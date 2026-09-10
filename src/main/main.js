@@ -5,7 +5,7 @@ const os = require('os')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
 const { pathToFileURL } = require('url')
-const { createAppLifecycle } = require('./lifecycle')
+const { createAppLifecycle, isRendererCrash } = require('./lifecycle')
 const { createUpdateController } = require('./updater')
 const {
   MAX_CONFIG_BYTES,
@@ -132,23 +132,20 @@ const lifecycle = createAppLifecycle({ app, logLine })
 app.on('before-quit', () => lifecycle.begin('before-quit'))
 app.on('render-process-gone', (event, webContents, details) => {
   const reason = details ? details.reason + ' (код ' + details.exitCode + ')' : '?'
-  if (lifecycle.isShuttingDown() || !details || details.reason === 'clean-exit') return
+  // Chromium reports a renderer as "killed" while a BrowserWindow is being
+  // destroyed on some Windows 10 systems. It is an expected close path, not a
+  // crash. Never relaunch automatically from this event: doing so can create a
+  // reopen loop if Windows delivers the renderer event before the window event.
+  if (lifecycle.isShuttingDown() || !isRendererCrash(details)) return
   logLine('[crash] процесс окна упал: ' + reason)
   if (ciSmokeTest) return app.exit(1)
   enableSafeGpuMode('renderer: ' + reason)
-  if (!startedInSafeMode) {
-    logLine('[recovery] перезапуск приложения в безопасном режиме')
-    try {
-      lifecycle.relaunch(
-        process.argv.slice(1).filter((arg) => arg !== '--meowshell-safe-mode').concat('--meowshell-safe-mode'),
-        'renderer recovery'
-      )
-    } catch (err) {
-      reportFatal(err)
-    }
-    return
-  }
-  reportFatal(new Error('Окно аварийно завершилось даже в безопасном режиме: ' + reason + '\nЛог: ' + errorLogPath + '\nДампы: ' + app.getPath('crashDumps')))
+  reportFatal(new Error(
+    (startedInSafeMode ? 'Окно аварийно завершилось в безопасном режиме: ' : 'Окно аварийно завершилось: ') +
+    reason + '\nMeowShell будет закрыт. При следующем ручном запуске GPU будет отключён.\nЛог: ' +
+    errorLogPath + '\nДампы: ' + app.getPath('crashDumps')
+  ))
+  lifecycle.quit('renderer crash')
 })
 app.on('child-process-gone', (event, details) => {
   if (!details) return

@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
-const { cleanReason, createAppLifecycle } = require('../src/main/lifecycle')
+const { cleanReason, createAppLifecycle, isRendererCrash } = require('../src/main/lifecycle')
 
 function fixture() {
   const calls = []
@@ -45,4 +45,13 @@ test('requested restart is scheduled once and uses graceful quit', () => {
 test('shutdown reasons are safe and bounded for local diagnostics', () => {
   assert.equal(cleanReason(' window\n\u0000 close '), 'window close')
   assert.equal(cleanReason('x'.repeat(500)).length, 160)
+})
+
+test('normal Windows renderer teardown is never treated as a crash', () => {
+  assert.equal(isRendererCrash({ reason: 'clean-exit', exitCode: 0 }), false)
+  assert.equal(isRendererCrash({ reason: 'killed', exitCode: 15 }), false)
+  assert.equal(isRendererCrash({ reason: 'abnormal-exit', exitCode: 1 }), false)
+  for (const reason of ['crashed', 'oom', 'launch-failed', 'integrity-failure']) {
+    assert.equal(isRendererCrash({ reason }), true)
+  }
 })

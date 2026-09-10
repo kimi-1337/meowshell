@@ -1,6 +1,6 @@
 {
   "name": "meowshell",
-  "version": "2.3.0-beta.6",
+  "version": "2.3.0-beta.7",
   "private": true,
   "license": "GPL-3.0-only",
   "author": {
@@ -15,6 +15,7 @@
   "bugs": {
     "url": "https://github.com/kimi-1337/meowshell/issues"
   },
+  "homepage": "https://github.com/kimi-1337/meowshell",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
@@ -35,7 +36,8 @@
     "appId": "com.kimi.meowshell",
     "productName": "MeowShell",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "publish": {
       "provider": "github",
@@ -109,6 +111,11 @@
     "nsis": {
       "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}",
       "license": "LICENSE",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeader": "installer/installer-header.bmp",
+      "installerSidebar": "installer/installer-sidebar.bmp",
+      "uninstallerSidebar": "installer/uninstaller-sidebar.bmp",
       "multiLanguageInstaller": true,
       "installerLanguages": [
         "en_US",
@@ -116,7 +123,14 @@
       ],
       "oneClick": false,
       "perMachine": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "shortcutName": "MeowShell",
+      "uninstallDisplayName": "MeowShell ${version}",
+      "uninstallUrlHelp": "https://github.com/kimi-1337/meowshell/issues",
+      "uninstallUrlInfoAbout": "https://github.com/kimi-1337/meowshell",
+      "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

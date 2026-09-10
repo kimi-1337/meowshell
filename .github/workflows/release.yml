@@ -30,7 +30,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft --prerelease \
               --title "MeowShell $GITHUB_REF_NAME (Beta)" \
-              --notes "Unsigned beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload." \
+              --notes "Beta build. Verify SHA256SUMS.txt before running. No telemetry or automatic crash upload." \
               --generate-notes
           fi
 
@@ -54,7 +54,27 @@ jobs:
       - run: npm run ensure:win-pty
       - name: Build ZIP and NSIS installer
         shell: pwsh
+        env:
+          # Optional trusted code-signing certificate. When these repository
+          # secrets are configured, electron-builder signs the app and setup.
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
         run: npx electron-builder --win zip nsis --${{ matrix.arch }} --publish never
+      - name: Verify Authenticode signature when configured
+        shell: pwsh
+        env:
+          SIGNING_CONFIGURED: ${{ secrets.WINDOWS_CSC_LINK }}
+        run: |
+          if ($env:SIGNING_CONFIGURED) {
+            Get-ChildItem dist/*-setup.exe | ForEach-Object {
+              $signature = Get-AuthenticodeSignature $_.FullName
+              if ($signature.Status -ne "Valid") {
+                throw "Invalid Authenticode signature on $($_.Name): $($signature.Status)"
+              }
+            }
+          } else {
+            Write-Host "WINDOWS_CSC_LINK is not configured; build remains unsigned and SmartScreen may warn."
+          }
       - name: Preserve architecture update manifest
         shell: pwsh
         run: Copy-Item dist/latest.yml "dist/latest-${{ matrix.arch }}.yml"

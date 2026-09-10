@@ -51,6 +51,17 @@ test('схема настроек отбрасывает неизвестные 
   })
 })
 
+test('настройки панели инструментов нормализуют порядок и скрытые кнопки', () => {
+  const result = sanitizeSettings({
+    toolbarOrder: ['sftp', 'split', 'sftp', 'unknown'],
+    hiddenToolbarItems: ['monitor', 'unknown', 'monitor'],
+    showSnippetsBar: false,
+  })
+  assert.deepEqual(result.toolbarOrder, ['sftp', 'split', 'broadcast', 'monitor', 'tunnels'])
+  assert.deepEqual(result.hiddenToolbarItems, ['monitor'])
+  assert.equal(result.showSnippetsBar, false)
+})
+
 test('SSH-профиль хранит секрет только активного способа входа', () => {
   assert.deepEqual(sanitizeConnection({
     id: 'one', host: 'example.org', port: 22, username: 'meow', authMode: 'key',

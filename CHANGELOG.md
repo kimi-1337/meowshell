@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0-beta.7
+
+- Removed automatic renderer-crash relaunches and explicitly ignore the normal
+  Windows `killed` teardown reason, preventing close/reopen loops.
+- Added dedicated Interface and Updates settings pages.
+- Added drag-to-reorder tabs and configurable toolbar visibility/order.
+- Added a setting to hide the quick-command/library bar.
+- Removed the duplicate sidebar brand, widened saved-server controls, and
+  eliminated their accidental horizontal scrollbar.
+- Added branded artwork and metadata for the Windows installer and uninstaller.
+
 ## 2.3.0-beta.6
 
 - fixed the custom title-bar close action being mistaken for a renderer crash

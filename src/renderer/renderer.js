@@ -91,7 +91,18 @@ let settings = {
   bgDim: 40,
   bgBlur: 0,
   quakeEnabled: false,
+  showSnippetsBar: true,
+  toolbarOrder: ['broadcast', 'monitor', 'tunnels', 'split', 'sftp'],
+  hiddenToolbarItems: [],
   snippets: [],
+}
+const DEFAULT_TOOLBAR_ORDER = ['broadcast', 'monitor', 'tunnels', 'split', 'sftp']
+const TOOLBAR_LABELS = {
+  broadcast: 'Broadcast-ввод',
+  monitor: 'Мониторинг сервера',
+  tunnels: 'SSH-туннели',
+  split: 'Разделение терминала',
+  sftp: 'SFTP',
 }
 let connections = []
 const tabs = new Map() // id -> { id, type, title, term, fit, tabEl, paneEl, sftpPath, split? }
@@ -146,6 +157,91 @@ function fmtSize(n) {
   return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
 }
 
+function normalizedToolbarOrder(value) {
+  const result = []
+  for (const item of Array.isArray(value) ? value : []) {
+    if (DEFAULT_TOOLBAR_ORDER.includes(item) && !result.includes(item)) result.push(item)
+  }
+  for (const item of DEFAULT_TOOLBAR_ORDER) if (!result.includes(item)) result.push(item)
+  return result
+}
+
+function applyInterfacePreferences() {
+  settings.toolbarOrder = normalizedToolbarOrder(settings.toolbarOrder)
+  settings.hiddenToolbarItems = [...new Set(
+    (Array.isArray(settings.hiddenToolbarItems) ? settings.hiddenToolbarItems : [])
+      .filter((item) => DEFAULT_TOOLBAR_ORDER.includes(item))
+  )]
+  document.body.classList.toggle('snippets-hidden', settings.showSnippetsBar === false)
+  const actions = $('#tab-actions')
+  if (!actions) return
+  for (const id of settings.toolbarOrder) {
+    const button = actions.querySelector('[data-toolbar-item="' + id + '"]')
+    if (!button) continue
+    button.classList.toggle('toolbar-user-hidden', settings.hiddenToolbarItems.includes(id))
+    actions.appendChild(button)
+  }
+  requestAnimationFrame(() => {
+    const tab = tabs.get(activeId)
+    if (tab && tab.fit) fitTab(tab)
+  })
+}
+
+function toolbarEditorHtml() {
+  return normalizedToolbarOrder(settings.toolbarOrder).map((id) => {
+    const checked = !(settings.hiddenToolbarItems || []).includes(id) ? ' checked' : ''
+    return '<div class="toolbar-edit-row" draggable="true" data-toolbar-id="' + id + '">' +
+      '<span class="toolbar-grip" title="Перетащите для изменения порядка">⋮⋮</span>' +
+      '<span class="toolbar-edit-label">' + escapeHtml(TOOLBAR_LABELS[id]) + '</span>' +
+      '<label class="toolbar-visible"><input type="checkbox"' + checked + '> Показывать</label>' +
+      '<span class="toolbar-move"><button class="btn small" type="button" data-move="-1" title="Переместить влево">←</button>' +
+      '<button class="btn small" type="button" data-move="1" title="Переместить вправо">→</button></span></div>'
+  }).join('')
+}
+
+function setupToolbarEditor(paneEl) {
+  const list = paneEl.querySelector('#st-toolbar-list')
+  if (!list) return
+  let dragged = null
+  const commit = () => {
+    const rows = [...list.querySelectorAll('.toolbar-edit-row')]
+    settings.toolbarOrder = rows.map((row) => row.dataset.toolbarId)
+    settings.hiddenToolbarItems = rows
+      .filter((row) => !row.querySelector('input[type="checkbox"]').checked)
+      .map((row) => row.dataset.toolbarId)
+    applyInterfacePreferences()
+    void saveSettingsChecked()
+  }
+  for (const row of list.querySelectorAll('.toolbar-edit-row')) {
+    row.addEventListener('dragstart', (event) => {
+      dragged = row
+      row.classList.add('dragging')
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', row.dataset.toolbarId)
+    })
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging')
+      dragged = null
+      commit()
+    })
+    row.addEventListener('dragover', (event) => {
+      if (!dragged || dragged === row) return
+      event.preventDefault()
+      const rect = row.getBoundingClientRect()
+      list.insertBefore(dragged, event.clientY < rect.top + rect.height / 2 ? row : row.nextSibling)
+    })
+    row.querySelector('input[type="checkbox"]').addEventListener('change', commit)
+    row.querySelectorAll('[data-move]').forEach((button) => button.addEventListener('click', () => {
+      const direction = Number(button.dataset.move)
+      const sibling = direction < 0 ? row.previousElementSibling : row.nextElementSibling
+      if (!sibling) return
+      if (direction < 0) list.insertBefore(row, sibling)
+      else list.insertBefore(sibling, row)
+      commit()
+    }))
+  }
+}
+
 function updateKey(state) {
   return String(state.version || state.currentVersion || '') + ':' + String(state.status || '')
 }
@@ -175,7 +271,7 @@ function renderUpdateSettings() {
   button.disabled = !updateState.supported || ['checking', 'downloading', 'downloaded', 'installing'].includes(updateState.status)
   button.textContent = updateState.status === 'checking'
     ? uiText('Checking…', 'Проверяем…')
-    : uiText('Check', 'Проверить')
+    : uiText('Check now', 'Проверить сейчас')
 }
 
 function renderUpdateState(nextState) {
@@ -395,6 +491,43 @@ function makeTerm(sessId, tab, slot, cellEl) {
   return { term, fit, search, binding }
 }
 
+function syncTabOrderFromDom() {
+  const snapshot = new Map(tabs)
+  const order = [...$('#tabs').querySelectorAll('.tab[data-tab-id]')].map((item) => item.dataset.tabId)
+  tabs.clear()
+  for (const id of order) if (snapshot.has(id)) tabs.set(id, snapshot.get(id))
+  for (const [id, tab] of snapshot) if (!tabs.has(id)) tabs.set(id, tab)
+  snapshotTabs()
+  void saveSettingsChecked({ silent: true })
+}
+
+function enableTabReordering(tabEl, id) {
+  tabEl.dataset.tabId = String(id)
+  tabEl.draggable = true
+  tabEl.title = tabEl.title || 'Зажмите и перетащите вкладку влево или вправо'
+  tabEl.addEventListener('dragstart', (event) => {
+    if (event.target.closest('.tab-close') || event.target.closest('[contenteditable="true"]')) {
+      event.preventDefault()
+      return
+    }
+    tabEl.classList.add('dragging')
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(id))
+  })
+  tabEl.addEventListener('dragover', (event) => {
+    const dragged = $('#tabs .tab.dragging')
+    if (!dragged || dragged === tabEl) return
+    event.preventDefault()
+    const rect = tabEl.getBoundingClientRect()
+    $('#tabs').insertBefore(dragged, event.clientX < rect.left + rect.width / 2 ? tabEl : tabEl.nextSibling)
+  })
+  tabEl.addEventListener('drop', (event) => event.preventDefault())
+  tabEl.addEventListener('dragend', () => {
+    tabEl.classList.remove('dragging')
+    syncTabOrderFromDom()
+  })
+}
+
 function addTab(id, title, type, sshCfg) {
   const tabEl = document.createElement('div')
   const tabDomId = 'terminal-tab-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '-')
@@ -421,6 +554,7 @@ function addTab(id, title, type, sshCfg) {
     e.stopPropagation()
     closeTab(tab.id, true)
   })
+  enableTabReordering(tabEl, id)
   $('#tabs').appendChild(tabEl)
 
   const paneEl = document.createElement('div')
@@ -1038,6 +1172,7 @@ async function init() {
   rendererSafeMode = cfg.safeMode === true
   if (rendererSafeMode) settings.webglRenderer = false
   applyBodyTheme()
+  applyInterfacePreferences()
   renderConnections()
   renderSnippets()
   updateEmptyState()
@@ -1839,6 +1974,7 @@ function openSettingsTab() {
     }
   })
   tabEl.querySelector('.tab-close').addEventListener('click', (e) => { e.stopPropagation(); closeTab('__settings__', false) })
+  enableTabReordering(tabEl, '__settings__')
   $('#tabs').appendChild(tabEl)
   const paneEl = document.createElement('div')
   paneEl.className = 'term-pane settings-pane hidden'
@@ -1873,12 +2009,14 @@ function settingsPaneHtml() {
     <div class="set-nav-title">Настройки</div>
     <input id="st-search" class="set-search" type="search" placeholder="Поиск настроек…" spellcheck="false">
     <div class="set-nav-item active" data-cat="appearance"><i class=ic-brush></i> Внешний вид</div>
+    <div class="set-nav-item" data-cat="interface"><i class=ic-grid></i> Интерфейс</div>
     <div class="set-nav-item" data-cat="background"><i class=ic-image></i> Фон</div>
     <div class="set-nav-item" data-cat="terminal"><i class=ic-terminal></i> Терминал</div>
     <div class="set-nav-item" data-cat="ssh"><i class=ic-key></i> SSH</div>
     <div class="set-nav-item" data-cat="hotkeys"><i class=ic-zap></i> Хоткеи</div>
     <div class="set-nav-item" data-cat="experimental"><i class=ic-zap></i> Экспериментальные</div>
     <div class="set-nav-item" data-cat="misc"><i class=ic-grid></i> Прочее</div>
+    <div class="set-nav-item" data-cat="updates"><i class=ic-download></i> Обновления</div>
     <div class="set-nav-note">Все изменения применяются и сохраняются сразу</div>
   </nav>
   <div class="set-body">
@@ -1911,6 +2049,18 @@ function settingsPaneHtml() {
           <span class="chip" data-font="Consolas, 'Courier New', monospace">Consolas</span>
         </div>
         <div class="set-hint">Шрифт должен быть установлен в Windows. Cascadia Code и JetBrains Mono — бесплатные и выглядят лучше всего.</div>
+      </div>
+    </section>
+    <section class="set-section hidden" data-cat="interface">
+      <h2>Интерфейс</h2>
+      <div class="set-card">
+        <div class="set-row"><label>Показывать панель быстрых команд</label><input id="st-show-snippets" type="checkbox"></div>
+        <div class="set-hint">Скрывает строку «Команда / Библиотека» над терминалом. Сами сохранённые команды не удаляются.</div>
+      </div>
+      <div class="set-card">
+        <b>Кнопки справа от вкладок</b>
+        <div class="set-hint">Перетаскивайте строки или используйте стрелки, чтобы изменить порядок. Любую кнопку можно скрыть.</div>
+        <div id="st-toolbar-list" class="toolbar-editor">${toolbarEditorHtml()}</div>
       </div>
     </section>
     <section class="set-section hidden" data-cat="background">
@@ -1994,11 +2144,6 @@ function settingsPaneHtml() {
         <div class="set-row"><label>Импорт серверов из Tabby</label><button id="st-import-tabby" class="btn small" type="button">Импортировать…</button></div>
       </div>
       <div class="set-card">
-        <b>Обновления</b>
-        <div class="set-row"><label id="st-update-status">Автоматическая проверка обновлений включена</label><button id="st-update-check" class="btn small" type="button">Проверить</button></div>
-        <div class="set-hint">Установщик скачивается только с GitHub Releases и проверяется по SHA-512 перед запуском. Установка выполняется только после подтверждения.</div>
-      </div>
-      <div class="set-card">
         <b>Данные и диагностика</b>
         <div class="set-row"><label>Экспорт без паролей и ключевых фраз</label><button id="st-export" class="btn small" type="button">Экспортировать…</button></div>
         <div class="set-row"><label>Импорт конфигурации</label><button id="st-import" class="btn small" type="button">Импортировать…</button></div>
@@ -2010,8 +2155,15 @@ function settingsPaneHtml() {
         <div class="row-btns set-actions"><button id="st-reset-ui" class="btn" type="button">Сбросить настройки интерфейса</button><button id="st-reset-all" class="btn danger" type="button">Сбросить все данные</button></div>
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
+    </section>
+    <section class="set-section hidden" data-cat="updates">
+      <h2>Обновления</h2>
+      <div class="set-card update-settings-card">
+        <div class="set-row"><label id="st-update-status">Автоматическая проверка обновлений включена</label><button id="st-update-check" class="btn small" type="button">Проверить сейчас</button></div>
+        <div class="set-hint">Установщик скачивается только с GitHub Releases и проверяется по SHA-512 перед запуском. Установка выполняется только после подтверждения.</div>
+      </div>
       <div class="set-card">
-        <div id="st-app-version" class="set-hint">MeowShell v2.3.0-beta.6 · Electron + xterm.js</div>
+        <div id="st-app-version" class="set-hint">MeowShell v2.3.0-beta.7 · Electron + xterm.js</div>
       </div>
     </section>
   </div>
@@ -2094,6 +2246,8 @@ function buildSettingsPane(paneEl) {
   q('#st-webgl').disabled = rendererSafeMode
   if (rendererSafeMode) q('#st-webgl').title = 'Отключено безопасным режимом после сбоя renderer/GPU'
   q('#st-reconnect').checked = settings.autoReconnect !== false
+  q('#st-show-snippets').checked = settings.showSnippetsBar !== false
+  setupToolbarEditor(paneEl)
   q('#st-safe-row').classList.toggle('hidden', !rendererSafeMode)
   renderUpdateSettings()
 
@@ -2168,6 +2322,11 @@ function buildSettingsPane(paneEl) {
     applyAllSettings()
   })
   q('#st-reconnect').addEventListener('change', () => { settings.autoReconnect = q('#st-reconnect').checked; applyAllSettings() })
+  q('#st-show-snippets').addEventListener('change', () => {
+    settings.showSnippetsBar = q('#st-show-snippets').checked
+    applyInterfacePreferences()
+    void saveSettingsChecked()
+  })
   q('#st-import-tabby').addEventListener('click', async () => {
     const r = await window.api.importTabby()
     if (!r || r.canceled) return
@@ -2296,22 +2455,12 @@ function toggleBroadcast() {
 }
 
 // === кнопки в таббаре ===
-function v9MkBtn(id, txt, title, onClick) {
-  const ref = $('#btn-split')
-  const b = document.createElement('button')
-  b.id = id
-  b.className = ref.className.replace(/\bhidden\b/, '').trim()
-  b.innerHTML = txt
-  b.title = title
-  b.addEventListener('click', onClick)
-  ref.parentNode.insertBefore(b, ref)
-  return b
-}
-const btnBroadcast = v9MkBtn('btn-broadcast', '<i class=ic-broadcast></i>', 'Broadcast-ввод (Ctrl+Shift+B)', () => toggleBroadcast())
-const btnMonitor = v9MkBtn('btn-monitor', '<i class=ic-chart></i>', 'Мониторинг сервера: CPU/RAM/диск', () => toggleMonitor())
-const btnTunnels = v9MkBtn('btn-tunnels', '<i class=ic-tunnel></i>', 'SSH-туннели (порт-форвардинг)', () => openTunnels())
-btnMonitor.classList.add('hidden')
-btnTunnels.classList.add('hidden')
+const btnBroadcast = $('#btn-broadcast')
+const btnMonitor = $('#btn-monitor')
+const btnTunnels = $('#btn-tunnels')
+btnBroadcast.addEventListener('click', () => toggleBroadcast())
+btnMonitor.addEventListener('click', () => toggleMonitor())
+btnTunnels.addEventListener('click', () => openTunnels())
 
 const __v9ActivateTab = activateTab
 activateTab = function (id) {
@@ -2587,7 +2736,7 @@ function mergeCustomThemes() {
 }
 
 function applyBodyTheme() {
-  const keep = ['sidebar-hidden', 'has-bg', 'broadcast-on'].filter((c) => document.body.classList.contains(c))
+  const keep = ['sidebar-hidden', 'has-bg', 'broadcast-on', 'snippets-hidden'].filter((c) => document.body.classList.contains(c))
   const th = THEMES[settings.theme]
   const isCustom = !!(th && th.custom)
   document.body.className = 'theme-' + (isCustom ? 'dark' : (th ? settings.theme : 'dark'))

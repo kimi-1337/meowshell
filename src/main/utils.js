@@ -138,8 +138,23 @@ function sanitizeSettings(value) {
     'cursorBlink', 'copyOnSelect', 'smoothCursor', 'smoothTextAnimation',
     'webglRenderer', 'autoReconnect', 'quakeEnabled', 'quakeDock', 'restoreTabs',
     'pasteGuard', 'pasteTrimEnd', 'rightClickPaste', 'ctrlCCopy',
-    'onboardingComplete',
+    'onboardingComplete', 'showSnippetsBar',
   ]) optionalBoolean(settings, key, out)
+
+  const toolbarIds = ['broadcast', 'monitor', 'tunnels', 'split', 'sftp']
+  const toolbarList = (value, appendMissing) => {
+    if (!Array.isArray(value)) return null
+    const result = []
+    for (const item of value) {
+      if (toolbarIds.includes(item) && !result.includes(item)) result.push(item)
+    }
+    if (appendMissing) for (const item of toolbarIds) if (!result.includes(item)) result.push(item)
+    return result
+  }
+  const toolbarOrder = toolbarList(settings.toolbarOrder, true)
+  const hiddenToolbarItems = toolbarList(settings.hiddenToolbarItems, false)
+  if (toolbarOrder) out.toolbarOrder = toolbarOrder
+  if (hiddenToolbarItems) out.hiddenToolbarItems = hiddenToolbarItems
 
   out.snippets = Array.isArray(settings.snippets)
     ? settings.snippets.slice(0, 500).map((item) => {

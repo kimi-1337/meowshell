@@ -1,11 +1,17 @@
 'use strict'
 
+const RENDERER_CRASH_REASONS = new Set(['crashed', 'oom', 'launch-failed', 'integrity-failure'])
+
 function cleanReason(value) {
   return String(value || 'shutdown')
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160) || 'shutdown'
+}
+
+function isRendererCrash(details) {
+  return !!(details && RENDERER_CRASH_REASONS.has(String(details.reason || '')))
 }
 
 function createAppLifecycle({ app, logLine = () => {} }) {
@@ -50,4 +56,4 @@ function createAppLifecycle({ app, logLine = () => {} }) {
   }
 }
 
-module.exports = { cleanReason, createAppLifecycle }
+module.exports = { cleanReason, createAppLifecycle, isRendererCrash }
