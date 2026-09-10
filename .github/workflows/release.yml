@@ -71,6 +71,12 @@ jobs:
           $process = Start-Process $exe.FullName -ArgumentList "--meowshell-ci-smoke", "--user-data-dir=$profile" -PassThru
           if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Smoke test timed out" }
           if ($process.ExitCode -ne 0) { throw "Smoke test failed with exit code $($process.ExitCode)" }
+          Start-Sleep -Seconds 2
+          $leftovers = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) })
+          if ($leftovers.Count -gt 0) {
+            $leftovers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            throw "MeowShell left $($leftovers.Count) process(es) behind after window close"
+          }
       - name: Create architecture checksums
         shell: pwsh
         run: |

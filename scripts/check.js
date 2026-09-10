@@ -11,6 +11,7 @@ const fail = (message) => failures.push(message)
 
 const files = [
   'src/main/main.js',
+  'src/main/lifecycle.js',
   'src/main/preload.js',
   'src/main/sftp-utils.js',
   'src/main/updater.js',
@@ -72,6 +73,10 @@ for (const [needle, message] of [
   ['ensurePrivateDirectory(sftp, cache)', 'Paste-media должен проверять приватность удалённого каталога'],
   ["reason: exitCode !== null || exitSignal ? 'exit' : 'disconnect'", 'SSH exit и disconnect должны различаться'],
   ["handleIpc('ssh:format-command'", 'SSH-команда должна форматироваться в main process'],
+  ["lifecycle.quit('titlebar close')", 'Закрытие окна должно начинать штатное завершение приложения'],
+  ["win.on('close', () => lifecycle.begin('window close'))", 'Нативное закрытие окна должно блокировать crash-relaunch'],
+  ['icon: windowIconPath', 'Окно должно явно получать иконку для панели задач'],
+  ['app.setAppUserModelId(WINDOWS_APP_ID)', 'Windows AppUserModelID должен совпадать с идентификатором приложения'],
 ]) {
   if (!main.includes(needle)) fail(message)
 }
@@ -104,6 +109,9 @@ for (const file of ['README.md', 'README.ru.md', 'CHANGELOG.md']) {
 }
 if (pkg.license !== 'GPL-3.0-only') fail('package.json должен использовать GPL-3.0-only')
 if (!fs.existsSync(path.join(root, 'LICENSE'))) fail('Отсутствует файл LICENSE')
+if (!pkg.build || !pkg.build.appId || !main.includes("const WINDOWS_APP_ID = '" + pkg.build.appId + "'")) {
+  fail('Windows AppUserModelID должен точно совпадать с build.appId')
+}
 
 const updater = read('src/main/updater.js')
 const releaseWorkflow = read('.github/workflows/release.yml')

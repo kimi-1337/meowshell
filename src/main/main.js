@@ -5,6 +5,7 @@ const os = require('os')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
 const { pathToFileURL } = require('url')
+const { createAppLifecycle } = require('./lifecycle')
 const { createUpdateController } = require('./updater')
 const {
   MAX_CONFIG_BYTES,
@@ -126,20 +127,22 @@ try {
   }
 } catch {}
 
-let isQuitting = false
 let suppressShutdownLog = false
-app.on('before-quit', () => { isQuitting = true })
+const lifecycle = createAppLifecycle({ app, logLine })
+app.on('before-quit', () => lifecycle.begin('before-quit'))
 app.on('render-process-gone', (event, webContents, details) => {
   const reason = details ? details.reason + ' (код ' + details.exitCode + ')' : '?'
+  if (lifecycle.isShuttingDown() || !details || details.reason === 'clean-exit') return
   logLine('[crash] процесс окна упал: ' + reason)
   if (ciSmokeTest) return app.exit(1)
-  if (isQuitting || !details || details.reason === 'clean-exit') return
   enableSafeGpuMode('renderer: ' + reason)
   if (!startedInSafeMode) {
     logLine('[recovery] перезапуск приложения в безопасном режиме')
     try {
-      app.relaunch({ args: process.argv.slice(1).filter((arg) => arg !== '--meowshell-safe-mode').concat('--meowshell-safe-mode') })
-      app.exit(0)
+      lifecycle.relaunch(
+        process.argv.slice(1).filter((arg) => arg !== '--meowshell-safe-mode').concat('--meowshell-safe-mode'),
+        'renderer recovery'
+      )
     } catch (err) {
       reportFatal(err)
     }
@@ -171,6 +174,8 @@ let win = null
 let nextId = 1
 const sessions = new Map() // id -> { type, write, resize, kill, client? }
 const pendingSshClients = new Map()
+const WINDOWS_APP_ID = 'com.kimi.meowshell'
+if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID)
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 else app.on('second-instance', () => {
@@ -629,6 +634,7 @@ handleIpc('update:install', () => updateController.install())
 // ---------- окно ----------
 
 function createWindow() {
+  const windowIconPath = path.join(app.getAppPath(), 'assets', process.platform === 'win32' ? 'icon.ico' : 'logo.png')
   win = new BrowserWindow({
     width: 1200,
     height: 760,
@@ -638,6 +644,7 @@ function createWindow() {
     title: 'MeowShell',
     autoHideMenuBar: true,
     frame: false, // своя минималистичная шапка вместо системной рамки
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -668,6 +675,8 @@ function createWindow() {
   // сообщаем рендереру о развёртывании — чтобы менять иконку кнопки в шапке
   win.on('maximize', () => send('win:max-state', true))
   win.on('unmaximize', () => send('win:max-state', false))
+  win.on('close', () => lifecycle.begin('window close'))
+  win.on('closed', () => { win = null })
 }
 
 // ---------- кнопки собственной шапки окна ----------
@@ -677,7 +686,7 @@ onIpc('win:maximize-toggle', () => {
   if (win.isMaximized()) win.unmaximize()
   else win.maximize()
 })
-onIpc('win:close', () => { if (win) win.close() })
+onIpc('win:close', () => lifecycle.quit('titlebar close'))
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return
@@ -700,7 +709,10 @@ app.whenReady().then(() => {
   setupAutoUpdater()
 })
 
-app.on('window-all-closed', () => {
+let shutdownCleanupDone = false
+function cleanupRuntimeResources() {
+  if (shutdownCleanupDone) return
+  shutdownCleanupDone = true
   updateController.dispose()
   for (const client of pendingSshClients.values()) {
     try { client.destroy() } catch {}
@@ -712,7 +724,12 @@ app.on('window-all-closed', () => {
     try { stopMonitor(id) } catch {}
     cleanupTemporaryMedia(id)
   }
-  app.quit()
+  sessions.clear()
+}
+
+app.on('before-quit', cleanupRuntimeResources)
+app.on('window-all-closed', () => {
+  lifecycle.quit('last window closed')
 })
 
 // ---------- локальный терминал (PTY) ----------
@@ -1417,8 +1434,14 @@ handleIpc('app:clear-safe-mode', () => {
 })
 
 onIpc('app:restart', () => {
-  app.relaunch({ args: process.argv.slice(1).filter((arg) => arg !== '--meowshell-safe-mode') })
-  app.exit(0)
+  try {
+    lifecycle.relaunch(
+      process.argv.slice(1).filter((arg) => arg !== '--meowshell-safe-mode'),
+      'settings restart'
+    )
+  } catch (err) {
+    reportFatal(err)
+  }
 })
 
 onIpc('app:smoke-ready', (e, result) => {
@@ -1428,7 +1451,10 @@ onIpc('app:smoke-ready', (e, result) => {
     return app.exit(1)
   }
   logLine('[smoke] PASS: renderer initialized and local PTY completed input/output/resize')
-  setTimeout(() => app.exit(0), 250)
+  setTimeout(() => {
+    if (win && !win.isDestroyed()) win.close()
+    else lifecycle.quit('smoke complete')
+  }, 250)
 })
 
 handleIpc('config:save-connection', (e, conn) => {

@@ -2011,7 +2011,7 @@ function settingsPaneHtml() {
         <div class="set-row hidden" id="st-safe-row"><label>Безопасный режим GPU</label><button id="st-clear-safe" class="btn small" type="button">Отключить безопасный режим и перезапустить</button></div>
       </div>
       <div class="set-card">
-        <div id="st-app-version" class="set-hint">MeowShell v2.3.0-beta.5 · Electron + xterm.js</div>
+        <div id="st-app-version" class="set-hint">MeowShell v2.3.0-beta.6 · Electron + xterm.js</div>
       </div>
     </section>
   </div>

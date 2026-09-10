@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0-beta.6
+
+- fixed the custom title-bar close action being mistaken for a renderer crash
+  and relaunching MeowShell instead of terminating it;
+- replaced immediate restart exits with graceful Electron shutdown so local
+  PTY, SSH, tunnel, monitor, and updater resources are released exactly once;
+- added a Windows shutdown regression smoke that rejects leftover MeowShell
+  processes after the application window closes;
+- fixed the Windows 10 taskbar identity by assigning the packaged window icon
+  explicitly and matching its AppUserModelID to the installer application ID.
+
 ## 2.3.0-beta.5
 
 - added in-terminal update notifications, manual background download progress,
